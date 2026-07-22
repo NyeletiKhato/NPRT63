@@ -50,3 +50,15 @@ class BorrowRecord(models.Model):
 
     def __str__(self):
         return f"{self.user.username} borrowed {self.book.title}"
+
+
+class LoginActivity(models.Model):
+    """An audit entry created whenever a user successfully signs in."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    logged_in_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-logged_in_at']
+
+    def __str__(self):
+        return f"{self.user.username} logged in at {self.logged_in_at:%Y-%m-%d %H:%M}"

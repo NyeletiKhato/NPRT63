@@ -469,6 +469,27 @@ button:disabled {
   background-size: cover;
 }
 
+.admin-overview-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+}
+
+.admin-overview-grid .dashboard-intro {
+  min-height: 100%;
+}
+
+.admin-stat-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-stat-grid .stat {
+  align-content: center;
+  min-height: 142px;
+}
+
 .dashboard-grid {
   display: grid;
   gap: 16px;
@@ -810,6 +831,61 @@ select {
   gap: 18px;
 }
 
+.report-heading,
+.report-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.report-heading h2,
+.report-heading p,
+.report-table-section h3 {
+  margin: 0;
+}
+
+.report-heading p {
+  color: #5e6b78;
+  margin-top: 6px;
+}
+
+.report-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.secondary {
+  background: #edf7f5;
+  color: #0f766e;
+}
+
+.report-table-section {
+  display: grid;
+  gap: 10px;
+}
+
+.report-table-wrap {
+  overflow-x: auto;
+}
+
+.report-table {
+  border-collapse: collapse;
+  min-width: 760px;
+  width: 100%;
+}
+
+.report-table th,
+.report-table td {
+  border: 1px solid #e3e8ee;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.report-table th {
+  background: #f8fafc;
+}
+
 .split {
   align-items: start;
   grid-template-columns: 360px 1fr;
@@ -826,6 +902,11 @@ select {
 }
 
 @media (max-width: 760px) {
+  .report-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .screen {
     padding: 18px;
   }
@@ -840,8 +921,13 @@ select {
 
   .entry-shell,
   .auth-page,
+  .admin-overview-grid,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .admin-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .entry-hero,
@@ -885,6 +971,12 @@ select {
   }
 }
 
+@media (max-width: 520px) {
+  .admin-stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media print {
   body {
     background: white;
@@ -898,6 +990,22 @@ select {
   .notice,
   .print-button {
     display: none !important;
+  }
+
+  .report-actions {
+    display: none !important;
+  }
+
+  .report-table-wrap {
+    overflow: visible;
+  }
+
+  .report-table {
+    min-width: 0;
+  }
+
+  .report-table-section {
+    break-inside: avoid;
   }
 
   .screen,

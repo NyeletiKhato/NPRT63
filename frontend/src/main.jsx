@@ -52,8 +52,8 @@ function App() {
   const [csrfToken, setCsrfToken] = useState('');
   const [user, setUser] = useState(null);
   const [view, setView] = useState('dashboard');
-  const [authScreen, setAuthScreen] = useState('login-user');
-  const [history, setHistory] = useState([{ type: 'auth', value: 'login-user' }]);
+  const [authScreen, setAuthScreen] = useState('entry');
+  const [history, setHistory] = useState([{ type: 'auth', value: 'entry' }]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -131,12 +131,18 @@ function App() {
   }, []);
 
   async function handleLogout() {
-    await api.post('/api/logout/');
-    setUser(null);
-    setView('dashboard');
-    setAuthScreen('entry');
-    setHistory([{ type: 'auth', value: 'entry' }]);
-    setHistoryIndex(0);
+    try {
+      await api.post('/api/logout/');
+    } catch (error) {
+      showMessage(error.message);
+    } finally {
+      setUser(null);
+      setView('dashboard');
+      setAuthScreen('entry');
+      setCsrfToken('');
+      setHistory([{ type: 'auth', value: 'entry' }]);
+      setHistoryIndex(0);
+    }
   }
 
   if (loading) {
@@ -169,6 +175,7 @@ function App() {
           api={api}
           authScreen={authScreen}
           setAuthScreen={navigateAuth}
+          setCsrfToken={setCsrfToken}
           setUser={setUser}
           setView={setView}
           resetHistory={(entry) => {
@@ -191,7 +198,7 @@ function App() {
   );
 }
 
-function AuthRoutes({ api, authScreen, setAuthScreen, setUser, setView, resetHistory, showMessage }) {
+function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   if (authScreen === 'login-admin') {
     return (
       <AuthPanel
@@ -200,6 +207,7 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setUser, setView, resetHis
         role="admin"
         title="Admin Login"
         setAuthScreen={setAuthScreen}
+        setCsrfToken={setCsrfToken}
         setUser={setUser}
         setView={setView}
         resetHistory={resetHistory}
@@ -215,6 +223,7 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setUser, setView, resetHis
         role="user"
         title="User Login"
         setAuthScreen={setAuthScreen}
+        setCsrfToken={setCsrfToken}
         setUser={setUser}
         setView={setView}
         resetHistory={resetHistory}
@@ -230,6 +239,7 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setUser, setView, resetHis
         role="user"
         title="User Registration"
         setAuthScreen={setAuthScreen}
+        setCsrfToken={setCsrfToken}
         setUser={setUser}
         setView={setView}
         resetHistory={resetHistory}
@@ -271,7 +281,7 @@ function EntryScreen({ setAuthScreen }) {
   );
 }
 
-function AuthPanel({ api, mode, role, title, setAuthScreen, setUser, setView, resetHistory, showMessage }) {
+function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
 
   async function submit(event) {
@@ -280,6 +290,9 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setUser, setView, re
       const data = mode === 'register'
         ? await api.post('/api/register/', form)
         : await api.post('/api/login/', { ...form, role });
+      if (data.csrfToken) {
+        setCsrfToken(data.csrfToken);
+      }
       setUser(data.user);
       setView('dashboard');
       resetHistory({ type: 'view', value: 'dashboard' });
@@ -396,17 +409,52 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
   if (view === 'reports') {
     return (
       <section className="panel report-panel">
-        <h2>Reports</h2>
-        <div className="stats-grid compact">
-          <Stat label="Total books" value={summary.stats.total_books} />
-          <Stat label="Borrowed" value={summary.stats.total_borrowed} />
-          <Stat label="Returned" value={summary.stats.total_returned} />
-          <Stat label="Users" value={summary.stats.total_users} />
+        <div className="report-heading">
+          <div>
+            <h2>Library Administration Report</h2>
+            <p>Borrowing, outstanding balances, and successful login activity.</p>
+          </div>
+          <div className="report-actions">
+            <button type="button" className="secondary" onClick={() => { window.location.href = '/admin-reports/download/'; }}>Download CSV</button>
+            <button type="button" className="primary" onClick={() => window.print()}>Print Report</button>
+          </div>
         </div>
+        <div className="stats-grid compact">
+          <Stat label="Books in catalogue" value={summary.stats.total_books} />
+          <Stat label="Borrowed (all time)" value={summary.report_stats.total_borrowed} />
+          <Stat label="Books currently owed" value={summary.report_stats.books_owed} />
+          <Stat label="Outstanding amount" value={`R${Number(summary.report_stats.amount_owed).toFixed(2)}`} />
+        </div>
+        <ReportTable title="Borrowing Records" columns={['Borrower', 'Book', 'Borrowed', 'Due', 'Status', 'Fine', 'Paid']} rows={summary.records.map((record) => [
+          record.user.username, record.book.title, record.borrow_date, record.due_date, record.status,
+          `R${Number(record.fine_amount).toFixed(2)}`, record.fine_paid ? 'Yes' : 'No',
+        ])} emptyText="No borrowing records yet." />
+        <ReportTable title="Successful Login History" columns={['Username', 'Email', 'Role', 'Logged in at']} rows={summary.login_activities.map((activity) => [
+          activity.user.username, activity.user.email || 'No email', activity.user.role,
+          new Date(activity.logged_in_at).toLocaleString(),
+        ])} emptyText="Login history will appear after users sign in." />
       </section>
     );
   }
   return null;
+}
+
+function ReportTable({ title, columns, rows, emptyText }) {
+  return (
+    <section className="report-table-section">
+      <h3>{title}</h3>
+      <div className="report-table-wrap">
+        <table className="report-table">
+          <thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+          <tbody>
+            {rows.length ? rows.map((row, index) => <tr key={`${title}-${index}`}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>) : (
+              <tr><td colSpan={columns.length}>{emptyText}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
 function DashboardAction({ tone, title, text, action, onClick }) {
@@ -441,16 +489,18 @@ function UserDashboard({ setView }) {
 function AdminDashboard({ summary, setView }) {
   return (
     <section className="dashboard">
-      <div className="dashboard-intro admin-intro">
-        <p className="eyebrow">Admin Dashboard</p>
-        <h2>Control the library catalogue and daily borrowing work.</h2>
-        <p>Use the admin tools to maintain books, view users, inspect borrowed records, and track activity.</p>
-      </div>
-      <div className="stats-grid compact">
-        <Stat label="Total books" value={summary.stats.total_books} />
-        <Stat label="Borrowed" value={summary.stats.total_borrowed} />
-        <Stat label="Returned" value={summary.stats.total_returned} />
-        <Stat label="Users" value={summary.stats.total_users} />
+      <div className="admin-overview-grid">
+        <div className="dashboard-intro admin-intro">
+          <p className="eyebrow">Admin Dashboard</p>
+          <h2>Control the library catalogue and daily borrowing work.</h2>
+          <p>Use the admin tools to maintain books, view users, inspect borrowed records, and track activity.</p>
+        </div>
+        <div className="admin-stat-grid">
+          <Stat label="Total books" value={summary.stats.total_books} />
+          <Stat label="Borrowed" value={summary.stats.total_borrowed} />
+          <Stat label="Returned" value={summary.stats.total_returned} />
+          <Stat label="Users" value={summary.stats.total_users} />
+        </div>
       </div>
       <div className="dashboard-grid">
         <DashboardAction tone="blue" title="Manage Books" text="Add, update, and delete books." action="Manage" onClick={() => setView('books')} />

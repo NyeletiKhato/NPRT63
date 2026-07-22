@@ -1,35 +1,96 @@
 {% extends 'core/base.html' %}
 
 {% block content %}
-<h2 class="mb-4">Admin Reports</h2>
+<style>
+    @media print {
+        nav, .no-print { display: none !important; }
+        body { background: #fff; }
+        .card, .table-container { box-shadow: none !important; border: 1px solid #ddd; }
+        .container { max-width: 100%; margin: 0; }
+        .report-section { break-inside: avoid; }
+    }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-4 no-print">
+    <div>
+        <h2 class="mb-1">Library Administration Report</h2>
+        <p class="text-muted mb-0">Generated {{ generated_at|date:"d F Y, H:i" }}</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{% url 'download_admin_report' %}" class="btn btn-success">Download CSV</a>
+        <button type="button" class="btn btn-primary" onclick="window.print()">Print Report</button>
+    </div>
+</div>
+
+<div class="d-none d-print-block mb-4">
+    <h2>Library Administration Report</h2>
+    <p>Generated {{ generated_at|date:"d F Y, H:i" }}</p>
+</div>
 
 <div class="row">
     <div class="col-md-3 mb-3">
         <div class="card shadow p-3 text-center">
-            <h4>Total Books</h4>
+            <h4>Books in Catalogue</h4>
             <p>{{ total_books }}</p>
         </div>
     </div>
 
     <div class="col-md-3 mb-3">
         <div class="card shadow p-3 text-center">
-            <h4>Currently Borrowed</h4>
+            <h4>Borrowed (All Time)</h4>
             <p>{{ total_borrowed }}</p>
         </div>
     </div>
 
     <div class="col-md-3 mb-3">
         <div class="card shadow p-3 text-center">
-            <h4>Returned Books</h4>
-            <p>{{ total_returned }}</p>
+            <h4>Books Currently Owed</h4>
+            <p>{{ books_owed }}</p>
         </div>
     </div>
 
     <div class="col-md-3 mb-3">
         <div class="card shadow p-3 text-center">
-            <h4>Active Borrowers</h4>
-            <p>{{ total_users }}</p>
+            <h4>Outstanding Amount</h4>
+            <p>R{{ amount_owed|floatformat:2 }}</p>
         </div>
     </div>
 </div>
+
+<section class="table-container report-section mb-4">
+    <h3 class="h4 mb-3">Borrowing Records</h3>
+    <div class="table-responsive">
+        <table class="table table-striped align-middle mb-0">
+            <thead><tr><th>Borrower</th><th>Book</th><th>Borrowed</th><th>Due</th><th>Status</th><th>Fine</th><th>Paid</th></tr></thead>
+            <tbody>
+                {% for record in records %}
+                <tr>
+                    <td>{{ record.user.username }}</td><td>{{ record.book.title }}</td>
+                    <td>{{ record.borrow_date|date:"d M Y" }}</td><td>{{ record.due_date|date:"d M Y" }}</td>
+                    <td>{{ record.get_status_display }}</td><td>R{{ record.fine_amount|floatformat:2 }}</td>
+                    <td>{% if record.fine_paid %}Yes{% else %}No{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="7" class="text-center text-muted">No borrowing records yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="table-container report-section">
+    <h3 class="h4 mb-3">Successful Login History</h3>
+    <div class="table-responsive">
+        <table class="table table-striped align-middle mb-0">
+            <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Logged in at</th></tr></thead>
+            <tbody>
+                {% for activity in login_activities %}
+                <tr><td>{{ activity.user.username }}</td><td>{{ activity.user.email|default:"—" }}</td><td>{{ activity.user.get_role_display }}</td><td>{{ activity.logged_in_at|date:"d M Y, H:i" }}</td></tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted">Login history will appear after users sign in.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
 {% endblock %}

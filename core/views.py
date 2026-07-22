@@ -1,3 +1,4 @@
+import csv
 import json
 
 from django.conf import settings
@@ -5,15 +6,39 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout as auth_logout
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.http import require_http_methods, require_POST
-from .models import CustomUser, Book, BorrowRecord
+from .models import CustomUser, Book, BorrowRecord, LoginActivity
 from .forms import RegisterForm, BookForm
 from django.utils import timezone
 
 FINE_PER_DAY = 20
+
+
+def _record_login(user):
+    """Keep a separate audit trail; Django's last_login only retains one login."""
+    LoginActivity.objects.create(user=user)
+
+
+def _report_data():
+    """Refresh fines first so report figures reflect today's outstanding amounts."""
+    records = BorrowRecord.objects.select_related('user', 'book').all().order_by('-borrow_date')
+    for record in records:
+        _update_record_fine(record)
+
+    outstanding_records = records.filter(status__in=['borrowed', 'overdue'])
+    unpaid_fines = records.filter(fine_amount__gt=0, fine_paid=False)
+    return {
+        'generated_at': timezone.localtime(),
+        'total_books': Book.objects.count(),
+        'total_borrowed': records.count(),
+        'books_owed': outstanding_records.count(),
+        'amount_owed': unpaid_fines.aggregate(total=Sum('fine_amount'))['total'] or 0,
+        'records': records,
+        'login_activities': LoginActivity.objects.select_related('user').all(),
+    }
 
 
 def _json_body(request):
@@ -70,6 +95,14 @@ def _borrow_record_json(record):
         'fine_amount': str(record.fine_amount),
         'fine_paid': record.fine_paid,
         'status': record.status,
+    }
+
+
+def _login_activity_json(activity):
+    return {
+        'id': activity.id,
+        'user': _user_json(activity.user),
+        'logged_in_at': activity.logged_in_at.isoformat(),
     }
 
 
@@ -142,7 +175,8 @@ def api_login(request):
         return JsonResponse({'error': 'You are not a normal user.'}, status=403)
 
     login(request, user)
-    return JsonResponse({'user': _user_json(user)})
+    _record_login(user)
+    return JsonResponse({'csrfToken': get_token(request), 'user': _user_json(user)})
 
 
 @require_POST
@@ -164,7 +198,7 @@ def api_register(request):
         role='user',
     )
     login(request, user)
-    return JsonResponse({'user': _user_json(user)}, status=201)
+    return JsonResponse({'csrfToken': get_token(request), 'user': _user_json(user)}, status=201)
 
 
 @require_POST
@@ -317,9 +351,8 @@ def api_admin_summary(request):
     if role_error:
         return role_error
 
-    records = BorrowRecord.objects.select_related('user', 'book').all().order_by('-borrow_date')
-    for record in records:
-        _update_record_fine(record)
+    report = _report_data()
+    records = report['records']
     return JsonResponse({
         'stats': {
             'total_books': Book.objects.count(),
@@ -327,8 +360,14 @@ def api_admin_summary(request):
             'total_returned': BorrowRecord.objects.filter(status='returned').count(),
             'total_users': CustomUser.objects.filter(role='user').count(),
         },
+        'report_stats': {
+            'total_borrowed': report['total_borrowed'],
+            'books_owed': report['books_owed'],
+            'amount_owed': str(report['amount_owed']),
+        },
         'users': [_user_json(user) for user in CustomUser.objects.all().order_by('username')],
         'records': [_borrow_record_json(record) for record in records],
+        'login_activities': [_login_activity_json(activity) for activity in report['login_activities']],
     })
 
 def user_entry(request):
@@ -364,6 +403,7 @@ def custom_login_view(request):
                 return redirect('/login/?role=user')
 
             login(request, user)
+            _record_login(user)
 
             if user.role == 'admin':
                 return redirect('admin_dashboard')
@@ -482,18 +522,39 @@ def admin_reports(request):
     if request.user.role != 'admin':
         return redirect('user_dashboard')
 
-    total_books = Book.objects.count()
-    total_borrowed = BorrowRecord.objects.filter(status='borrowed').count()
-    total_returned = BorrowRecord.objects.filter(status='returned').count()
-    total_users = BorrowRecord.objects.values('user').distinct().count()
+    return render(request, 'core/admin_reports.html', _report_data())
 
-    context = {
-        'total_books': total_books,
-        'total_borrowed': total_borrowed,
-        'total_returned': total_returned,
-        'total_users': total_users,
-    }
-    return render(request, 'core/admin_reports.html', context)
+
+@login_required
+def download_admin_report(request):
+    if request.user.role != 'admin':
+        return redirect('user_dashboard')
+
+    report = _report_data()
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="library-admin-report.csv"'
+    writer = csv.writer(response)
+    writer.writerow(['Library administration report'])
+    writer.writerow(['Generated', report['generated_at'].strftime('%d %B %Y %H:%M')])
+    writer.writerow([])
+    writer.writerow(['Summary'])
+    writer.writerow(['Books in catalogue', report['total_books']])
+    writer.writerow(['Books borrowed (all time)', report['total_borrowed']])
+    writer.writerow(['Books currently owed', report['books_owed']])
+    writer.writerow(['Outstanding amount (R)', report['amount_owed']])
+    writer.writerow([])
+    writer.writerow(['Borrowing records'])
+    writer.writerow(['Borrower', 'Book', 'Borrowed on', 'Due on', 'Status', 'Fine (R)', 'Fine paid'])
+    for record in report['records']:
+        writer.writerow([record.user.username, record.book.title, record.borrow_date, record.due_date,
+                         record.get_status_display(), record.fine_amount, 'Yes' if record.fine_paid else 'No'])
+    writer.writerow([])
+    writer.writerow(['Successful login history'])
+    writer.writerow(['Username', 'Email', 'Role', 'Logged in at'])
+    for activity in report['login_activities']:
+        writer.writerow([activity.user.username, activity.user.email, activity.user.get_role_display(),
+                         timezone.localtime(activity.logged_in_at).strftime('%d %B %Y %H:%M')])
+    return response
 
 
 @login_required

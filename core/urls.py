@@ -31,6 +31,7 @@ urlpatterns = [
     path('delete-book/<int:book_id>/', views.delete_book, name='delete_book'),
     path('admin-borrowed-books/', views.admin_borrowed_books, name='admin_borrowed_books'),
     path('admin-reports/', views.admin_reports, name='admin_reports'),
+    path('admin-reports/download/', views.download_admin_report, name='download_admin_report'),
     path('manage-users/', views.manage_users, name='manage_users'),
     
 
