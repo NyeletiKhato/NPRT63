@@ -1,0 +1,24 @@
+{% extends 'core/auth_base.html' %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="text-center mb-4">
+            <h1 class="page-title">User Registration</h1>
+        </div>
+
+        <div class="card card-custom p-4">
+            <form method="post">
+                {% csrf_token %}
+                {{ form.as_p }}
+                <button type="submit" class="btn btn-primary btn-custom w-100">Register</button>
+            </form>
+        </div>
+
+        <p class="mt-3 text-center">
+            Already have an account?
+            <a href="{% url 'login' %}?role=user">Login</a>
+        </p>
+    </div>
+</div>
+{% endblock %}

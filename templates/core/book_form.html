@@ -1,0 +1,12 @@
+{% extends 'core/base.html' %}
+
+{% block content %}
+<h2 class="mb-4">{{ title }}</h2>
+
+<form method="post" class="card p-4 shadow">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn btn-success">Save</button>
+    <a href="{% url 'manage_books' %}" class="btn btn-secondary">Cancel</a>
+</form>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends 'core/base.html' %}
+
+{% block content %}
+<h1 class="page-title">Fine Payment</h1>
+
+<div class="table-container">
+    <table class="table table-bordered table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Book Title</th>
+                <th>Due Date</th>
+                <th>Return Date</th>
+                <th>Fine Amount</th>
+                <th>Payment Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in unpaid_fines %}
+            <tr>
+                <td>{{ record.book.title }}</td>
+                <td>{{ record.due_date }}</td>
+                <td>{{ record.return_date }}</td>
+                <td>R{{ record.fine_amount }}</td>
+                <td>
+                    {% if record.fine_paid %}
+                        <span class="text-success fw-bold">Paid</span>
+                    {% else %}
+                        <span class="text-danger fw-bold">Unpaid</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if not record.fine_paid %}
+                        <a href="{% url 'pay_fine' record.id %}" class="btn btn-success btn-sm">Pay Fine</a>
+                    {% else %}
+                        <span class="text-success">Completed</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="6">You do not have any unpaid fines.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

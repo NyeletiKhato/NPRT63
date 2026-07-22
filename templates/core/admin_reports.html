@@ -1,0 +1,35 @@
+{% extends 'core/base.html' %}
+
+{% block content %}
+<h2 class="mb-4">Admin Reports</h2>
+
+<div class="row">
+    <div class="col-md-3 mb-3">
+        <div class="card shadow p-3 text-center">
+            <h4>Total Books</h4>
+            <p>{{ total_books }}</p>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-3">
+        <div class="card shadow p-3 text-center">
+            <h4>Currently Borrowed</h4>
+            <p>{{ total_borrowed }}</p>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-3">
+        <div class="card shadow p-3 text-center">
+            <h4>Returned Books</h4>
+            <p>{{ total_returned }}</p>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-3">
+        <div class="card shadow p-3 text-center">
+            <h4>Active Borrowers</h4>
+            <p>{{ total_users }}</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

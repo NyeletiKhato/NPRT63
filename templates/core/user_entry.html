@@ -1,0 +1,30 @@
+{% extends 'core/auth_base.html' %}
+
+{% block content %}
+<div class="text-center mb-5">
+    <h1 class="page-title">User Access</h1>
+    <p class="page-subtitle">Please choose one option</p>
+</div>
+
+<div class="row justify-content-center g-4">
+    <div class="col-md-4">
+        <div class="card card-custom p-4 text-center h-100">
+            <h3 class="mb-3">New User</h3>
+            <p class="mb-4">Create an account before using the system.</p>
+            <a href="{% url 'register' %}" class="btn btn-primary btn-custom w-100">Register</a>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card card-custom p-4 text-center h-100">
+            <h3 class="mb-3">Existing User</h3>
+            <p class="mb-4">Already have an account? Log in here.</p>
+            <a href="{% url 'login' %}?role=user" class="btn btn-success btn-custom w-100">User Login</a>
+        </div>
+    </div>
+</div>
+
+<div class="text-center mt-4">
+    <a href="{% url 'home' %}">Back</a>
+</div>
+{% endblock %}

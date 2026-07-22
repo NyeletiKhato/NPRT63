@@ -1,0 +1,26 @@
+{% extends 'core/auth_base.html' %}
+
+{% block content %}
+<div class="text-center mb-5">
+    <h1 class="page-title">Library Management System</h1>
+    <p class="page-subtitle">Please choose how you want to continue</p>
+</div>
+
+<div class="row justify-content-center g-4">
+    <div class="col-md-4">
+        <div class="card card-custom p-4 text-center h-100">
+            <h3 class="mb-3">User</h3>
+            <p class="mb-4">Students and normal library users</p>
+            <a href="{% url 'user_entry' %}" class="btn btn-primary btn-custom w-100">Continue as User</a>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card card-custom p-4 text-center h-100">
+            <h3 class="mb-3">Admin</h3>
+            <p class="mb-4">Library administrators only</p>
+            <a href="{% url 'login' %}?role=admin" class="btn btn-danger btn-custom w-100">Continue as Admin</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends 'core/base.html' %}
+
+{% block content %}
+<h1 class="page-title">Confirm Fine Payment</h1>
+
+<div class="card card-custom p-4">
+    <p><strong>Book Title:</strong> {{ record.book.title }}</p>
+    <p><strong>Due Date:</strong> {{ record.due_date }}</p>
+    <p><strong>Return Date:</strong> {{ record.return_date }}</p>
+    <p><strong>Fine Amount:</strong> R{{ record.fine_amount }}</p>
+
+    <form method="post">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success btn-custom">Confirm Payment</button>
+        <a href="{% url 'fine_payment' %}" class="btn btn-secondary btn-custom">Cancel</a>
+    </form>
+</div>
+{% endblock %}

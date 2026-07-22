@@ -1,0 +1,52 @@
+{% extends 'core/base.html' %}
+
+{% block content %}
+<h1 class="page-title">My Borrowed Books</h1>
+
+<div class="table-container">
+    <table class="table table-bordered table-striped align-middle">
+        <thead>
+            <tr>
+                <th>Book Title</th>
+                <th>Borrow Date</th>
+                <th>Due Date</th>
+                <th>Return Date</th>
+                <th>Status</th>
+                <th>Fine Amount</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in borrowed_books %}
+            <tr>
+                <td>{{ record.book.title }}</td>
+                <td>{{ record.borrow_date }}</td>
+                <td>{{ record.due_date }}</td>
+                <td>
+                    {% if record.return_date %}
+                        {{ record.return_date }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td>{{ record.status }}</td>
+                <td>R{{ record.fine_amount }}</td>
+                <td>
+                    {% if record.status == 'borrowed' %}
+                        <a href="{% url 'return_book' record.id %}" class="btn btn-danger btn-sm">
+                            Return
+                        </a>
+                    {% else %}
+                        <span class="text-success fw-bold">Returned</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="7">You have not borrowed any books yet.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

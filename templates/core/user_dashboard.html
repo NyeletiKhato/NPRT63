@@ -1,0 +1,39 @@
+{% extends 'core/base.html' %}
+
+{% block content %}
+<h1 class="page-title">User Dashboard</h1>
+
+<div class="row g-4">
+    <div class="col-md-3">
+        <div class="card card-custom p-4 h-100">
+            <h3>View Books</h3>
+            <p>See all available books in the library.</p>
+            <a href="{% url 'view_books' %}" class="btn btn-primary btn-custom w-100">View Books</a>
+        </div>
+    </div>
+
+    <div class="col-md-3">
+        <div class="card card-custom p-4 h-100">
+            <h3>Search Book</h3>
+            <p>Search by title, author, category, or ISBN.</p>
+            <a href="{% url 'view_books' %}" class="btn btn-info btn-custom w-100">Search Book</a>
+        </div>
+    </div>
+
+    <div class="col-md-3">
+        <div class="card card-custom p-4 h-100">
+            <h3>My Borrowed Books</h3>
+            <p>View books you have borrowed.</p>
+            <a href="{% url 'my_borrowed_books' %}" class="btn btn-warning btn-custom w-100">My Borrowed Books</a>
+        </div>
+    </div>
+
+    <div class="col-md-3">
+        <div class="card card-custom p-4 h-100">
+            <h3>Fine Payment</h3>
+            <p>View and pay your outstanding fines.</p>
+            <a href="{% url 'fine_payment' %}" class="btn btn-danger btn-custom w-100">Fine Payment</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
