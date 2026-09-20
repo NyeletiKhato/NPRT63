@@ -25,6 +25,9 @@
                 <div class="mb-4">
                     <label for="password" class="form-label fw-semibold">Password</label>
                     <input type="password" name="password" id="password" class="form-control" required>
+                    {% if request.GET.role != 'admin' %}
+                    <div class="text-end mt-2"><a href="{% url 'password_reset' %}">Forgot password?</a></div>
+                    {% endif %}
                 </div>
 
                 <input type="hidden" name="role" value="{{ request.GET.role|default:'user' }}">

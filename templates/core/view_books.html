@@ -26,7 +26,10 @@
 
                 {% if user.role == 'user' %}
                     {% if book.available_copies > 0 %}
-                        <a href="{% url 'borrow_book' book.id %}" class="btn btn-success">Borrow Book</a>
+                        <form method="post" action="{% url 'borrow_book' book.id %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-success">Borrow Book</button>
+                        </form>
                     {% else %}
                         <button class="btn btn-secondary" disabled>Not Available</button>
                     {% endif %}

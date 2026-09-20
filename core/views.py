@@ -6,6 +6,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout as auth_logout
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
@@ -459,31 +460,34 @@ def view_books(request):
 
 
 @login_required
+@require_POST
 def borrow_book(request, book_id):
     if request.user.role != 'user':
         messages.error(request, "Only users can borrow books.")
         return redirect('redirect_dashboard')
 
-    book = get_object_or_404(Book, id=book_id)
+    with transaction.atomic():
+        book = Book.objects.select_for_update().filter(id=book_id).first()
+        if not book:
+            messages.error(request, 'Book not found.')
+            return redirect('view_books')
 
-    already_borrowed = BorrowRecord.objects.filter(
-        user=request.user,
-        book=book,
-        status='borrowed'
-    ).exists()
+        book = _normalize_book_inventory(book)
+        already_borrowed = BorrowRecord.objects.filter(
+            user=request.user,
+            book=book,
+            status__in=['borrowed', 'overdue'],
+        ).exists()
 
-    if already_borrowed:
-        messages.warning(request, 'You already borrowed this book.')
-        return redirect('view_books')
-
-    book = _normalize_book_inventory(book)
-    if book.available_copies > 0:
-        BorrowRecord.objects.create(user=request.user, book=book)
-        book.available_copies -= 1
-        book.save()
-        messages.success(request, f'You borrowed "{book.title}" successfully.')
-    else:
-        messages.error(request, 'This book is not available right now.')
+        if already_borrowed:
+            messages.warning(request, 'You already borrowed this book.')
+        elif book.available_copies > 0:
+            BorrowRecord.objects.create(user=request.user, book=book)
+            book.available_copies -= 1
+            book.save(update_fields=['available_copies'])
+            messages.success(request, f'You borrowed "{book.title}" successfully.')
+        else:
+            messages.error(request, 'This book is not available right now.')
 
     return redirect('view_books')
 

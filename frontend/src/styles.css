@@ -8,6 +8,12 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
 }
@@ -34,8 +40,41 @@ button:disabled {
 }
 
 .screen {
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
-  padding: 32px;
+  min-height: 100dvh;
+  padding: 24px;
+}
+
+.app-content,
+.workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.app-content > .entry-shell,
+.app-content > .auth-page,
+.workspace > * {
+  flex: 1;
+}
+
+/* Use the available workspace width instead of constraining content to a centred column. */
+.topbar,
+.notice,
+.entry-shell,
+.auth-page,
+.dashboard,
+.books-page,
+.recommendations-page,
+.panel,
+.tabs,
+.stats-grid,
+.split {
+  max-width: none;
+  width: 100%;
 }
 
 .center {
@@ -99,6 +138,37 @@ button:disabled {
   gap: 12px;
 }
 
+.notification-bell {
+  background: white;
+  border: 1px solid #cbd5df;
+  border-radius: 999px;
+  min-height: 42px;
+  padding: 0;
+  position: relative;
+  width: 42px;
+}
+
+.notification-bell > span {
+  font-size: 1.1rem;
+}
+
+.notification-bell strong {
+  align-items: center;
+  background: #dc2626;
+  border: 2px solid white;
+  border-radius: 999px;
+  color: white;
+  display: flex;
+  font-size: 0.65rem;
+  height: 19px;
+  justify-content: center;
+  min-width: 19px;
+  padding: 0 4px;
+  position: absolute;
+  right: -7px;
+  top: -7px;
+}
+
 .notice {
   background: #17202a;
   border-radius: 6px;
@@ -107,6 +177,72 @@ button:disabled {
   max-width: 1180px;
   padding: 12px 16px;
 }
+
+.notification-heading {
+  align-items: start;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.notification-heading p:not(.eyebrow) {
+  color: #5e6b78;
+  margin: 8px 0 0;
+}
+
+.notification-list {
+  display: grid;
+  gap: 12px;
+}
+
+.notification-item {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dce2e8;
+  border-radius: 8px;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+.notification-item.unread {
+  background: #ecfdf5;
+  border-left: 5px solid #0f766e;
+}
+
+.notification-item h3 {
+  font-size: 1rem;
+  margin: 7px 0 4px;
+}
+
+.notification-item p,
+.notification-item small {
+  color: #5e6b78;
+  margin: 0;
+}
+
+.notification-item small {
+  display: block;
+  font-size: 0.76rem;
+  margin-top: 8px;
+}
+
+.notification-type {
+  background: #dbeafe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: .03em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.notification-type.overdue { background: #fee2e2; color: #b91c1c; }
+.notification-type.reservation_ready { background: #dcfce7; color: #15803d; }
 
 .entry-shell,
 .auth-page {
@@ -164,6 +300,43 @@ button:disabled {
 .entry-actions {
   display: grid;
   gap: 16px;
+}
+
+.qr-access {
+  align-items: center;
+  background: white;
+  border: 1px solid #dce2e8;
+  border-left: 6px solid #7c3aed;
+  border-radius: 8px;
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+}
+
+.qr-access svg {
+  background: white;
+  flex: 0 0 auto;
+}
+
+.qr-access div {
+  display: grid;
+  gap: 5px;
+}
+
+.qr-access span {
+  color: #6d28d9;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.qr-access strong {
+  font-size: 1.05rem;
+}
+
+.qr-access small {
+  color: #5e6b78;
+  line-height: 1.4;
 }
 
 .entry-card,
@@ -232,6 +405,14 @@ button:disabled {
 .auth-form h3 {
   font-size: 1.8rem;
   margin: 0 0 8px;
+}
+
+.reset-code {
+  background: #fef3c7;
+  border-radius: 6px;
+  color: #92400e;
+  margin: 0;
+  padding: 10px 12px;
 }
 
 .auth-switch {
@@ -975,6 +1156,23 @@ select {
   .admin-stat-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Keep every application view fluid; these rules intentionally follow the
+   component styles above, which otherwise set a fixed 1180px content cap. */
+.topbar,
+.notice,
+.entry-shell,
+.auth-page,
+.dashboard,
+.books-page,
+.recommendations-page,
+.panel,
+.tabs,
+.stats-grid,
+.split {
+  max-width: none;
+  width: 100%;
 }
 
 @media print {

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { QRCodeSVG } from 'qrcode.react';
 import './styles.css';
 
 const emptyBook = {
@@ -32,15 +33,20 @@ function getBookImage(book) {
 }
 
 async function request(path, options = {}, csrfToken = '') {
-  const response = await fetch(path, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
+        ...(options.headers || {}),
+      },
+      ...options,
+    });
+  } catch {
+    throw new Error('Cannot connect to the library service. Start the app with npm run dev and try again.');
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error || 'Request failed.');
@@ -162,6 +168,7 @@ function App() {
         </div>
         {user && (
           <div className="session">
+            {user.role === 'user' && <NotificationBell api={api} openNotifications={() => navigateView('notifications')} />}
             <span>{user.username}</span>
             <button type="button" onClick={handleLogout}>Sign out</button>
           </div>
@@ -170,6 +177,7 @@ function App() {
 
       {message && <div className="notice">{message}</div>}
 
+      <div className="app-content">
       {!user ? (
         <AuthRoutes
           api={api}
@@ -187,13 +195,16 @@ function App() {
       ) : (
         <>
           <Nav role={user.role} view={view} setView={navigateView} />
-          {user.role === 'admin' ? (
-            <AdminWorkspace api={api} view={view} setView={navigateView} showMessage={showMessage} />
-          ) : (
-            <UserWorkspace api={api} view={view} setView={navigateView} showMessage={showMessage} />
-          )}
+          <div className="workspace">
+            {user.role === 'admin' ? (
+              <AdminWorkspace api={api} view={view} setView={navigateView} showMessage={showMessage} />
+            ) : (
+              <UserWorkspace api={api} view={view} setView={navigateView} showMessage={showMessage} />
+            )}
+          </div>
         </>
       )}
+      </div>
     </main>
   );
 }
@@ -247,10 +258,16 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, set
       />
     );
   }
+  if (authScreen === 'password-reset') {
+    return <PasswordResetPanel api={api} setAuthScreen={setAuthScreen} showMessage={showMessage} />;
+  }
   return <EntryScreen setAuthScreen={setAuthScreen} />;
 }
 
 function EntryScreen({ setAuthScreen }) {
+  const accessUrl = import.meta.env.VITE_LIBRARY_URL || window.location.href;
+  const isLocalOnly = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+
   return (
     <section className="entry-shell">
       <div className="entry-hero">
@@ -276,6 +293,14 @@ function EntryScreen({ setAuthScreen }) {
           <strong>Create Account</strong>
           <small>Register for a library account and start borrowing.</small>
         </button>
+        <aside className="qr-access" aria-labelledby="qr-access-title">
+          <QRCodeSVG value={accessUrl} size={144} level="M" includeMargin />
+          <div>
+            <span>Mobile Access</span>
+            <strong id="qr-access-title">Scan to open the library</strong>
+            <small>{isLocalOnly ? 'Open this site using its Wi-Fi network address before scanning from a phone.' : 'Use your phone camera to open this library portal.'}</small>
+          </div>
+        </aside>
       </div>
     </section>
   );
@@ -323,7 +348,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         {mode === 'register' && (
           <label>
             Email
-            <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+          <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
           </label>
         )}
         <label>
@@ -334,17 +359,72 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         {mode === 'register' ? (
           <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p>
         ) : role === 'user' ? (
-          <p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p>
+          <>
+            <p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p>
+            <p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p>
+          </>
         ) : null}
       </form>
     </section>
   );
 }
 
+function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
+  const [step, setStep] = useState('request');
+  const [form, setForm] = useState({ username: '', email: '', code: '', password: '' });
+  const [demoCode, setDemoCode] = useState('');
+
+  async function requestCode(event) {
+    event.preventDefault();
+    try {
+      const data = await api.post('/api/password-reset/request/', form);
+      setDemoCode(data.reset_code || '');
+      setStep('confirm');
+      showMessage(data.message);
+    } catch (error) { showMessage(error.message); }
+  }
+
+  async function resetPassword(event) {
+    event.preventDefault();
+    try {
+      const data = await api.post('/api/password-reset/confirm/', form);
+      showMessage(data.message);
+      setAuthScreen('login-user');
+    } catch (error) { showMessage(error.message); }
+  }
+
+  return (
+    <section className="auth-page">
+      <div className="auth-copy">
+        <button type="button" className="link-button" onClick={() => setAuthScreen('login-user')}>Back to login</button>
+        <p className="eyebrow">Account recovery</p>
+        <h2>Reset your password</h2>
+        <p>{step === 'request' ? 'Enter your account details to request a one-time reset code.' : 'Enter the one-time code and choose a new password.'}</p>
+      </div>
+      {step === 'request' ? (
+        <form className="panel auth-form" onSubmit={requestCode}>
+          <h3>Request reset code</h3>
+          <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
+          <label>Email address<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>
+          <button className="primary" type="submit">Request code</button>
+        </form>
+      ) : (
+        <form className="panel auth-form" onSubmit={resetPassword}>
+          <h3>Choose a new password</h3>
+          {demoCode && <p className="reset-code">Demo reset code: <strong>{demoCode}</strong></p>}
+          <label>Reset code<input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required /></label>
+          <label>New password<input type="password" minLength="8" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+          <button className="primary" type="submit">Reset password</button>
+        </form>
+      )}
+    </section>
+  );
+}
+
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['users', 'Users'], ['reports', 'Reports']]
-    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['my-books', 'My Books'], ['fines', 'Fines']];
+    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['reservations', 'Reservations'], ['users', 'Users'], ['reports', 'Reports']]
+    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['my-books', 'My Books'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['fines', 'Fines']];
 
   return (
     <nav className="tabs">
@@ -363,6 +443,12 @@ function UserWorkspace({ api, view, setView, showMessage }) {
   }
   if (view === 'my-books' || view === 'fines') {
     return <BorrowedBooks api={api} finesOnly={view === 'fines'} showMessage={showMessage} />;
+  }
+  if (view === 'reservations') {
+    return <MyReservations api={api} showMessage={showMessage} />;
+  }
+  if (view === 'notifications') {
+    return <NotificationCenter api={api} showMessage={showMessage} />;
   }
   if (view === 'recommendations') {
     return <Recommendations api={api} showMessage={showMessage} />;
@@ -390,6 +476,9 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
   if (view === 'borrowed') {
     return <RecordTable records={summary.records} />;
   }
+  if (view === 'reservations') {
+    return <ReservationTable reservations={summary.reservations} />;
+  }
   if (view === 'users') {
     return (
       <section className="panel">
@@ -415,7 +504,7 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
             <p>Borrowing, outstanding balances, and successful login activity.</p>
           </div>
           <div className="report-actions">
-            <button type="button" className="secondary" onClick={() => { window.location.href = '/admin-reports/download/'; }}>Download CSV</button>
+            <button type="button" className="secondary" onClick={() => { window.location.href = '/api/admin/reports/download/'; }}>Download CSV</button>
             <button type="button" className="primary" onClick={() => window.print()}>Print Report</button>
           </div>
         </div>
@@ -424,11 +513,15 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
           <Stat label="Borrowed (all time)" value={summary.report_stats.total_borrowed} />
           <Stat label="Books currently owed" value={summary.report_stats.books_owed} />
           <Stat label="Outstanding amount" value={`R${Number(summary.report_stats.amount_owed).toFixed(2)}`} />
+          <Stat label="Active reservations" value={summary.stats.active_reservations} />
         </div>
         <ReportTable title="Borrowing Records" columns={['Borrower', 'Book', 'Borrowed', 'Due', 'Status', 'Fine', 'Paid']} rows={summary.records.map((record) => [
           record.user.username, record.book.title, record.borrow_date, record.due_date, record.status,
           `R${Number(record.fine_amount).toFixed(2)}`, record.fine_paid ? 'Yes' : 'No',
         ])} emptyText="No borrowing records yet." />
+        <ReportTable title="Active Reservation Queue" columns={['Student', 'Book', 'Queue position', 'Status', 'Reserved at']} rows={summary.reservations.map((reservation) => [
+          reservation.user.username, reservation.book.title, reservation.queue_position, reservation.status, new Date(reservation.created_at).toLocaleString(),
+        ])} emptyText="No active reservations." />
         <ReportTable title="Successful Login History" columns={['Username', 'Email', 'Role', 'Logged in at']} rows={summary.login_activities.map((activity) => [
           activity.user.username, activity.user.email || 'No email', activity.user.role,
           new Date(activity.logged_in_at).toLocaleString(),
@@ -480,6 +573,7 @@ function UserDashboard({ setView }) {
         <DashboardAction tone="cyan" title="Search Book" text="Search by title, author, category, or ISBN." action="Find a book" onClick={() => setView('books')} />
         <DashboardAction tone="green" title="Recommended Books" text="Browse suggested books selected from available library titles." action="Explore picks" onClick={() => setView('recommendations')} />
         <DashboardAction tone="amber" title="My Borrowed Books" text="View books you have borrowed and return them." action="View records" onClick={() => setView('my-books')} />
+        <DashboardAction tone="green" title="My Reservations" text="Track your place in book waiting lists." action="View queue" onClick={() => setView('reservations')} />
         <DashboardAction tone="red" title="Fine Payment" text="View and pay your outstanding fines." action="Pay fines" onClick={() => setView('fines')} />
       </div>
     </section>
@@ -500,12 +594,14 @@ function AdminDashboard({ summary, setView }) {
           <Stat label="Borrowed" value={summary.stats.total_borrowed} />
           <Stat label="Returned" value={summary.stats.total_returned} />
           <Stat label="Users" value={summary.stats.total_users} />
+          <Stat label="Reservations" value={summary.stats.active_reservations} />
         </div>
       </div>
       <div className="dashboard-grid">
         <DashboardAction tone="blue" title="Manage Books" text="Add, update, and delete books." action="Manage" onClick={() => setView('books')} />
         <DashboardAction tone="cyan" title="Manage Users" text="View all users and admins." action="View users" onClick={() => setView('users')} />
         <DashboardAction tone="amber" title="View Borrowed Books" text="See all borrowed books." action="View records" onClick={() => setView('borrowed')} />
+        <DashboardAction tone="red" title="Reservation Queue" text="View students waiting for unavailable books." action="Open queue" onClick={() => setView('reservations')} />
         <DashboardAction tone="green" title="View Reports" text="Review totals and library activity." action="Open reports" onClick={() => setView('reports')} />
       </div>
     </section>
@@ -862,6 +958,15 @@ function BookBrowser({ api, canBorrow, showMessage }) {
     }
   }
 
+  async function reserve(book) {
+    try {
+      const data = await api.post(`/api/books/${book.id}/reserve/`);
+      showMessage(`Reserved ${book.title}. You are number ${data.reservation.queue_position} in the queue.`);
+    } catch (error) {
+      showMessage(error.message);
+    }
+  }
+
   return (
     <section className="books-page">
       <div className="books-hero">
@@ -890,11 +995,127 @@ function BookBrowser({ api, canBorrow, showMessage }) {
             </div>
             <div className="book-actions">
               <strong>{book.available_copies}/{book.quantity} available</strong>
-              {canBorrow && <button type="button" disabled={book.available_copies < 1} onClick={() => borrow(book)}>Borrow</button>}
+              {canBorrow && (book.available_copies > 0
+                ? <button type="button" onClick={() => borrow(book)}>Borrow</button>
+                : <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve</button>)}
             </div>
           </article>
         ))}
       </div>
+      </div>
+    </section>
+  );
+}
+
+function NotificationBell({ api, openNotifications }) {
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => api.get('/api/notifications/')
+      .then((data) => { if (active) setUnreadCount(data.unread_count); })
+      .catch(() => {});
+    load();
+    const timer = window.setInterval(load, 60000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [api]);
+
+  return (
+    <button type="button" className="notification-bell" onClick={openNotifications} aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`}>
+      <span aria-hidden="true">&#128276;</span>
+      {unreadCount > 0 && <strong>{unreadCount > 9 ? '9+' : unreadCount}</strong>}
+    </button>
+  );
+}
+
+function NotificationCenter({ api, showMessage }) {
+  const [notifications, setNotifications] = useState([]);
+
+  const loadNotifications = useCallback(async () => {
+    const data = await api.get('/api/notifications/');
+    setNotifications(data.notifications);
+  }, [api]);
+
+  useEffect(() => {
+    loadNotifications().catch((error) => showMessage(error.message));
+  }, [loadNotifications, showMessage]);
+
+  async function markRead(notification) {
+    try {
+      await api.post(`/api/notifications/${notification.id}/read/`);
+      setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
+    } catch (error) { showMessage(error.message); }
+  }
+
+  async function markAllRead() {
+    try {
+      await api.post('/api/notifications/read-all/');
+      setNotifications((items) => items.map((item) => ({ ...item, is_read: true })));
+      showMessage('All notifications marked as read.');
+    } catch (error) { showMessage(error.message); }
+  }
+
+  const unreadCount = notifications.filter((notification) => !notification.is_read).length;
+  return (
+    <section className="panel notifications-panel">
+      <div className="notification-heading">
+        <div><p className="eyebrow">Library Updates</p><h2>Notifications</h2><p>Due dates, overdue books, and reservation updates appear here.</p></div>
+        {unreadCount > 0 && <button type="button" className="secondary" onClick={markAllRead}>Mark all as read</button>}
+      </div>
+      <div className="notification-list">
+        {notifications.map((notification) => (
+          <article className={notification.is_read ? 'notification-item' : 'notification-item unread'} key={notification.id}>
+            <div><span className={`notification-type ${notification.type}`}>{notification.type.replace('_', ' ')}</span><h3>{notification.title}</h3><p>{notification.message}</p><small>{new Date(notification.created_at).toLocaleString()}</small></div>
+            {!notification.is_read && <button type="button" onClick={() => markRead(notification)}>Mark read</button>}
+          </article>
+        ))}
+        {!notifications.length && <div className="empty-state">You have no notifications yet.</div>}
+      </div>
+    </section>
+  );
+}
+
+function MyReservations({ api, showMessage }) {
+  const [reservations, setReservations] = useState([]);
+
+  async function loadReservations() {
+    const data = await api.get('/api/my-reservations/');
+    setReservations(data.reservations);
+  }
+
+  useEffect(() => {
+    loadReservations().catch((error) => showMessage(error.message));
+  }, []);
+
+  async function cancel(reservation) {
+    try {
+      await api.post(`/api/my-reservations/${reservation.id}/cancel/`);
+      showMessage(`Cancelled reservation for ${reservation.book.title}.`);
+      loadReservations();
+    } catch (error) {
+      showMessage(error.message);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="reservation-heading">
+        <div>
+          <p className="eyebrow">Reservation Queue</p>
+          <h2>My Reservations</h2>
+        </div>
+        <p>When a copy is returned, the first person in the queue is marked ready to borrow it.</p>
+      </div>
+      <div className="table">
+        {reservations.map((reservation) => (
+          <div className="row reservation-row" key={reservation.id}>
+            <span>{reservation.book.title}</span>
+            <span>Position #{reservation.queue_position}</span>
+            <span className={reservation.status === 'ready' ? 'badge ready-badge' : 'badge'}>{reservation.status === 'ready' ? 'Ready to borrow' : 'Waiting'}</span>
+            <button type="button" className="danger" onClick={() => cancel(reservation)}>Cancel</button>
+          </div>
+        ))}
+        {!reservations.length && <div className="empty-state">You have no active reservations.</div>}
       </div>
     </section>
   );
@@ -1134,6 +1355,25 @@ function RecordTable({ records }) {
             <span>R{record.fine_amount}</span>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function ReservationTable({ reservations }) {
+  return (
+    <section className="panel">
+      <h2>Active Reservation Queue</h2>
+      <div className="table">
+        {reservations.map((reservation) => (
+          <div className="row reservation-row" key={reservation.id}>
+            <span>{reservation.user.username}</span>
+            <span>{reservation.book.title}</span>
+            <span>Position #{reservation.queue_position}</span>
+            <span className={reservation.status === 'ready' ? 'badge ready-badge' : 'badge'}>{reservation.status}</span>
+          </div>
+        ))}
+        {!reservations.length && <div className="empty-state">No students are waiting for a book.</div>}
       </div>
     </section>
   );
