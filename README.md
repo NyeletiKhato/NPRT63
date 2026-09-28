@@ -7,7 +7,7 @@
 
 ## Overview
 
-This is a Library Management System with a React frontend and a Node.js (Express + SQLite) backend. It supports role-based access, catalogue management, borrowing and returns, fines, reservations, reports, reading recommendations, and in-app notifications.
+This is a Library Management System with a React frontend and a Node.js (Express + SQLite) backend. It supports role-based access, catalogue management, borrowing and returns, reservations, reports, reading recommendations, and in-app notifications.
 
 ## Run locally
 
@@ -31,6 +31,8 @@ site address. You can also set `VITE_LIBRARY_URL` to explicitly choose the URL t
 QR code contains.
 
 For production, run `npm run build` and then `npm start`.
+
+New member registrations are available immediately and do not require email confirmation.
 
 The Node/Express backend in `backend/server.js` is the active application backend. The Django directory is retained only as a legacy data source for the optional migration command; it is not required to run the application.
 

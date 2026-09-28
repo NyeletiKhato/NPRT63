@@ -31,7 +31,6 @@ urlpatterns = [
     path('api/books/<int:book_id>/borrow/', views.api_borrow_book, name='api_borrow_book'),
     path('api/my-books/', views.api_my_books, name='api_my_books'),
     path('api/my-books/<int:record_id>/return/', views.api_return_book, name='api_return_book'),
-    path('api/my-books/<int:record_id>/pay-fine/', views.api_pay_fine, name='api_pay_fine'),
     path('api/admin/summary/', views.api_admin_summary, name='api_admin_summary'),
 
     path('', views.home, name='home'),
@@ -60,6 +59,4 @@ urlpatterns = [
     path('return-book/<int:record_id>/', views.return_book, name='return_book'),
     path('manage-books/', views.manage_books, name='manage_books'),
 
-    path('fine-payment/', views.fine_payment_page, name='fine_payment'),
-path('pay-fine/<int:record_id>/', views.pay_fine, name='pay_fine'),
 ]

@@ -8,12 +8,16 @@ from datetime import timedelta
 class CustomUser(AbstractUser):
     ROLE_CHOICES = [
         ('admin', 'Admin'),
-        ('user', 'User'),
+        ('user', 'Member'),
     ]
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='user')
 
+    class Meta:
+        verbose_name = 'Member'
+        verbose_name_plural = 'Members'
+
     def __str__(self):
-        return f"{self.username} - {self.role}"
+        return f"{self.username} - {self.get_role_display()}"
 
 
 class Book(models.Model):
@@ -39,8 +43,6 @@ class BorrowRecord(models.Model):
     borrow_date = models.DateField(default=timezone.now)
     due_date = models.DateField(blank=True, null=True)
     return_date = models.DateField(null=True, blank=True)
-    fine_amount = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
-    fine_paid = models.BooleanField(default=False)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='borrowed')
 
     def save(self, *args, **kwargs):

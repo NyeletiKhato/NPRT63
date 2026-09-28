@@ -1,7 +1,7 @@
 {% extends 'core/base.html' %}
 
 {% block content %}
-<h2 class="mb-4">Manage Users</h2>
+<h2 class="mb-4">Manage Members</h2>
 
 <table class="table table-bordered table-striped align-middle">
     <thead>
@@ -21,14 +21,14 @@
                 {% if user.role == 'admin' %}
                     <span class="badge bg-danger">Admin</span>
                 {% else %}
-                    <span class="badge bg-primary">User</span>
+                    <span class="badge bg-primary">Member</span>
                 {% endif %}
             </td>
             <td>{{ user.date_joined|date:"M d, Y" }}</td>
         </tr>
         {% empty %}
         <tr>
-            <td colspan="4">No users found.</td>
+            <td colspan="4">No members found.</td>
         </tr>
         {% endfor %}
     </tbody>

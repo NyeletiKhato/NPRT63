@@ -1,11 +1,7 @@
-from decimal import Decimal
 from django.test import TestCase
 from django.urls import reverse
-from datetime import timedelta
-from django.utils import timezone
 
 from .models import Book, BorrowRecord, CustomUser, LoginActivity
-from .views import _update_record_fine
 
 
 class AdminReportTests(TestCase):
@@ -14,10 +10,9 @@ class AdminReportTests(TestCase):
         self.member = CustomUser.objects.create_user('member', password='member-pass', role='user')
         self.book = Book.objects.create(title='Report Book', author='Author', isbn='12345', category='Test')
 
-    def test_admin_can_download_report_with_outstanding_fine_and_login_history(self):
+    def test_admin_can_download_report_with_borrowing_and_login_history(self):
         BorrowRecord.objects.create(
-            user=self.member, book=self.book, due_date=timezone.now().date() - timedelta(days=1),
-            status='overdue', fine_amount=Decimal('20.00')
+            user=self.member, book=self.book, status='overdue'
         )
         LoginActivity.objects.create(user=self.member)
         self.client.force_login(self.admin)
@@ -26,7 +21,8 @@ class AdminReportTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'text/csv')
-        self.assertIn('Books currently owed,1', response.content.decode())
+        self.assertIn('Books currently borrowed,1', response.content.decode())
+        self.assertNotIn('Fine', response.content.decode())
         self.assertIn('member', response.content.decode())
 
 
@@ -81,33 +77,6 @@ class ReturnBookTests(TestCase):
         self.book.refresh_from_db()
         self.assertEqual(self.record.status, 'returned')
         self.assertEqual(self.book.available_copies, 1)
-
-
-class FineCalculationTests(TestCase):
-    def setUp(self):
-        self.member = CustomUser.objects.create_user('member', password='member-pass', role='user')
-        self.book = Book.objects.create(title='Fine Book', author='Author', isbn='fine-123', category='Test')
-
-    def test_overdue_book_incurs_fine(self):
-        record = BorrowRecord.objects.create(
-            user=self.member, book=self.book,
-            due_date=timezone.now().date() - timedelta(days=3),
-            status='borrowed'
-        )
-        _update_record_fine(record)
-        record.refresh_from_db()
-        self.assertEqual(record.fine_amount, Decimal('60.00'))
-        self.assertEqual(record.status, 'overdue')
-
-    def test_on_time_book_has_no_fine(self):
-        record = BorrowRecord.objects.create(
-            user=self.member, book=self.book,
-            due_date=timezone.now().date() + timedelta(days=5),
-            status='borrowed'
-        )
-        _update_record_fine(record)
-        record.refresh_from_db()
-        self.assertEqual(record.fine_amount, Decimal('0.00'))
 
 
 class RegistrationTests(TestCase):

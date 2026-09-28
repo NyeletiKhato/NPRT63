@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QRCodeSVG } from 'qrcode.react';
+import libraryBooks from './library-books.svg';
 import './styles.css';
 
 const emptyBook = {
@@ -30,6 +31,39 @@ const categoryImages = {
 
 function getBookImage(book) {
   return categoryImages[book.category?.toLowerCase()] || 'https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=700&q=80';
+}
+
+function getSouthAfricanPublicHolidays(year) {
+  const holidays = [
+    ['01-01', "New Year's Day"], ['03-21', 'Human Rights Day'], ['04-27', 'Freedom Day'],
+    ['05-01', "Workers' Day"], ['06-16', 'Youth Day'], ['08-09', "National Women's Day"],
+    ['09-24', 'Heritage Day'], ['12-16', 'Day of Reconciliation'], ['12-25', 'Christmas Day'],
+    ['12-26', 'Day of Goodwill'],
+  ].map(([date, name]) => ({ date: `${year}-${date}`, name }));
+
+  // Meeus/Jones/Butcher Gregorian Easter calculation; Easter determines Good Friday and Family Day.
+  const a = year % 19; const b = Math.floor(year / 100); const c = year % 100;
+  const d = Math.floor(b / 4); const e = b % 4; const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3); const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4); const k = c % 4; const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const easterMonth = Math.floor((h + l - 7 * m + 114) / 31);
+  const easterDay = ((h + l - 7 * m + 114) % 31) + 1;
+  const easter = new Date(Date.UTC(year, easterMonth - 1, easterDay));
+  const isoDate = (date) => date.toISOString().slice(0, 10);
+  const offsetDate = (days) => { const date = new Date(easter); date.setUTCDate(date.getUTCDate() + days); return isoDate(date); };
+  holidays.push({ date: offsetDate(-2), name: 'Good Friday' }, { date: offsetDate(1), name: 'Family Day' });
+
+  // Under the Public Holidays Act, a holiday falling on Sunday is observed on Monday.
+  const sundayHolidays = holidays.filter(({ date }) => new Date(`${date}T00:00:00Z`).getUTCDay() === 0);
+  sundayHolidays.forEach(({ date, name }) => {
+    const monday = new Date(`${date}T00:00:00Z`); monday.setUTCDate(monday.getUTCDate() + 1);
+    holidays.push({ date: isoDate(monday), name: `${name} (observed)` });
+  });
+
+  // The President declared 4 November 2026 a public holiday for local government elections.
+  if (year === 2026) holidays.push({ date: '2026-11-04', name: 'Local Government Elections' });
+  return holidays.sort((left, right) => left.date.localeCompare(right.date));
 }
 
 async function request(path, options = {}, csrfToken = '') {
@@ -157,23 +191,24 @@ function App() {
 
   return (
     <main className="screen">
-      <header className="topbar">
+      {user && <header className="topbar">
         <div className="nav-arrows" aria-label="Page navigation">
           <button type="button" onClick={goBack} disabled={historyIndex === 0} aria-label="Go back">‹</button>
           <button type="button" onClick={goForward} disabled={historyIndex >= history.length - 1} aria-label="Go forward">›</button>
         </div>
         <div>
           <p className="eyebrow">Library Management System</p>
-          <h1>{user ? `${user.role === 'admin' ? 'Admin' : 'Student'} Workspace` : 'Library Portal'}</h1>
+          <h1>{user ? `${user.role === 'admin' ? 'Admin' : 'Member'} Workspace` : 'Library Portal'}</h1>
         </div>
         {user && (
           <div className="session">
             {user.role === 'user' && <NotificationBell api={api} openNotifications={() => navigateView('notifications')} />}
+            {user.profile_photo ? <img className="session-avatar" src={user.profile_photo} alt="Your profile" /> : <span className="session-avatar avatar-fallback" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>}
             <span>{user.username}</span>
             <button type="button" onClick={handleLogout}>Sign out</button>
           </div>
         )}
-      </header>
+      </header>}
 
       {message && <div className="notice">{message}</div>}
 
@@ -197,9 +232,9 @@ function App() {
           <Nav role={user.role} view={view} setView={navigateView} />
           <div className="workspace">
             {user.role === 'admin' ? (
-              <AdminWorkspace api={api} view={view} setView={navigateView} showMessage={showMessage} />
+              <AdminWorkspace api={api} user={user} onUserChange={setUser} view={view} setView={navigateView} showMessage={showMessage} />
             ) : (
-              <UserWorkspace api={api} view={view} setView={navigateView} showMessage={showMessage} />
+              <UserWorkspace api={api} user={user} onUserChange={setUser} view={view} setView={navigateView} showMessage={showMessage} onDeactivated={handleLogout} />
             )}
           </div>
         </>
@@ -232,7 +267,7 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, set
         api={api}
         mode="login"
         role="user"
-        title="User Login"
+        title="Member Login"
         setAuthScreen={setAuthScreen}
         setCsrfToken={setCsrfToken}
         setUser={setUser}
@@ -248,7 +283,7 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, set
         api={api}
         mode="register"
         role="user"
-        title="User Registration"
+        title="Member Registration"
         setAuthScreen={setAuthScreen}
         setCsrfToken={setCsrfToken}
         setUser={setUser}
@@ -265,42 +300,138 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, set
 }
 
 function EntryScreen({ setAuthScreen }) {
-  const accessUrl = import.meta.env.VITE_LIBRARY_URL || window.location.href;
+  const configuredAccessUrl = import.meta.env.VITE_LIBRARY_URL;
   const isLocalOnly = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+  const [accessUrl, setAccessUrl] = useState(configuredAccessUrl || window.location.href);
+
+  useEffect(() => {
+    if (configuredAccessUrl || !isLocalOnly) return;
+    fetch('/api/network-address/')
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!data?.address) return;
+        const phoneUrl = new URL(window.location.href);
+        phoneUrl.hostname = data.address;
+        setAccessUrl(phoneUrl.toString());
+      })
+      .catch(() => {});
+  }, [configuredAccessUrl, isLocalOnly]);
+
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [newsletterEmail, setNewsletterEmail] = useState('');
+  const [newsletterMessage, setNewsletterMessage] = useState('');
+  const [newsletterState, setNewsletterState] = useState('');
+  const year = calendarMonth.getFullYear();
+  const month = calendarMonth.getMonth();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const calendarCells = [...Array(firstWeekday).fill(null), ...Array.from({ length: daysInMonth }, (_, index) => index + 1)];
+  const holidaysByDate = useMemo(() => new Map(getSouthAfricanPublicHolidays(year).map((holiday) => [holiday.date, holiday.name])), [year]);
+  const currentMonthHolidays = [...holidaysByDate.entries()].filter(([date]) => Number(date.slice(5, 7)) === month + 1);
+
+  async function subscribeToNewsletter(event) {
+    event.preventDefault();
+    setNewsletterMessage('');
+    setNewsletterState('');
+    try {
+      const data = await request('/api/newsletter/subscribe/', { method: 'POST', body: JSON.stringify({ email: newsletterEmail }) });
+      setNewsletterMessage(data.message);
+      setNewsletterState('success');
+      setNewsletterEmail('');
+    } catch (error) {
+      setNewsletterMessage(error.message);
+      setNewsletterState('error');
+    }
+  }
 
   return (
     <section className="entry-shell">
       <div className="entry-hero">
-        <div>
-          <p className="eyebrow">React Library Portal</p>
-          <h2>Manage books, members, borrowing, and fines with a focused dashboard.</h2>
-          <p>Choose your access type to continue into the library system.</p>
+        <div className="entry-stage">
+          <div className="hero-copy">
+            <p className="eyebrow"><span className="eyebrow-mark" aria-hidden="true"></span> Rustenburg community library</p>
+            <h2>Find your next <em>favourite.</em></h2>
+            <p>A good story, a new idea, a quiet place to explore. Your next great read is waiting right here.</p>
+            <button type="button" className="explore-button" onClick={() => setAuthScreen('login-user')}>
+              Explore the library <span aria-hidden="true">&rarr;</span>
+            </button>
+            <div className="hero-note"><span aria-hidden="true"></span> Come in, get curious, and make yourself at home.</div>
+          </div>
+          <div className="hero-art" aria-hidden="true">
+            <div className="art-sun"></div>
+            <div className="art-photo-wrap">
+              <img className="art-photo" src={libraryBooks} alt="" />
+            </div>
+            <span className="art-sticker sticker-read">A world<br />between covers</span>
+            <span className="art-sparkle sparkle-left"></span>
+            <span className="art-sparkle sparkle-top"></span>
+            <span className="art-caption"><span className="caption-dot"></span> DISCOVER SOMETHING NEW</span>
+          </div>
         </div>
-      </div>
-      <div className="entry-actions">
+        <div className="entry-actions" aria-label="Choose how to access the library">
         <button type="button" className="entry-card admin-card" onClick={() => setAuthScreen('login-admin')}>
-          <span>Admin</span>
-          <strong>Admin Login</strong>
-          <small>Manage books, users, borrowed records, and reports.</small>
+          <span className="entry-card-label">For library staff</span>
+          <span className="entry-card-title"><span className="access-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20V5h4v15M10 20V8h4v12M16 20V3h4v17M2 20h20" /></svg></span><strong>Library team</strong></span>
+          <small>Sign in to manage the collection and support readers.</small>
         </button>
         <button type="button" className="entry-card user-card" onClick={() => setAuthScreen('login-user')}>
-          <span>User</span>
-          <strong>User Login</strong>
-          <small>Browse books, borrow titles, return books, and pay fines.</small>
+          <span className="entry-card-label">For readers</span>
+          <span className="entry-card-title"><span className="access-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 6C9 3.5 5.5 3 2.5 4v15c3.2-1.1 6.6-.5 9.5 2 2.9-2.5 6.3-3.1 9.5-2V4c-3-.9-6.5-.5-9.5 2ZM12 6v15" /></svg></span><strong>Welcome back</strong></span>
+          <small>Sign in to find books, manage loans, and pick up where you left off.</small>
         </button>
         <button type="button" className="entry-card signup-card" onClick={() => setAuthScreen('signup')}>
-          <span>New User</span>
-          <strong>Create Account</strong>
-          <small>Register for a library account and start borrowing.</small>
+          <span className="entry-card-label">Start here</span>
+          <span className="entry-card-title"><span className="access-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h13a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V4ZM7 4v16M13 9v6M10 12h6" /></svg></span><strong>Join the library</strong></span>
+          <small>Create your account and start exploring the collection.</small>
         </button>
         <aside className="qr-access" aria-labelledby="qr-access-title">
           <QRCodeSVG value={accessUrl} size={144} level="M" includeMargin />
           <div>
             <span>Mobile Access</span>
             <strong id="qr-access-title">Scan to open the library</strong>
-            <small>{isLocalOnly ? 'Open this site using its Wi-Fi network address before scanning from a phone.' : 'Use your phone camera to open this library portal.'}</small>
+            <small>{isLocalOnly ? 'This QR code uses this computer’s Wi-Fi address. Connect your phone to the same network before scanning.' : 'Use your phone camera to open this library portal.'}</small>
           </div>
         </aside>
+        </div>
+      </div>
+      <section className="community-intro" aria-labelledby="community-intro-title">
+        <p className="eyebrow">Our story</p>
+        <h2 id="community-intro-title">A library built for Rustenburg</h2>
+        <p>This library was created for Rustenburg communities whose local libraries relied on manual systems to manage books and borrowing. It brings those services into one easier-to-use place, helping readers discover books, borrow and return them, and keep track of their loans.</p>
+      </section>
+      <div className="community-sections">
+        <section className="community-panel calendar-panel" aria-labelledby="calendar-title">
+          <div className="community-panel-heading">
+            <div><p className="eyebrow">South Africa</p><h2 id="calendar-title">Public holiday calendar</h2><p>National public holidays are marked on the calendar.</p></div>
+            <div className="calendar-controls"><button type="button" aria-label="Previous month" onClick={() => setCalendarMonth(new Date(year, month - 1, 1))}>‹</button><button type="button" aria-label="Next month" onClick={() => setCalendarMonth(new Date(year, month + 1, 1))}>›</button></div>
+          </div>
+          <div className="calendar-month">{calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div>
+          <div className="calendar-grid" role="grid" aria-label={calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}>
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <span className="calendar-weekday" role="columnheader" key={day}>{day}</span>)}
+            {calendarCells.map((day, index) => {
+              const dateKey = day ? `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : '';
+              const holidayName = holidaysByDate.get(dateKey);
+              const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
+              return <span className={`calendar-day${holidayName ? ' public-holiday' : ''}${isToday ? ' today' : ''}`} role="gridcell" aria-label={day ? `${new Date(year, month, day).toLocaleDateString(undefined, { dateStyle: 'full' })}${holidayName ? `, ${holidayName}, public holiday` : ''}` : undefined} title={holidayName || undefined} key={`${year}-${month}-${index}`}>{day || ''}</span>;
+            })}
+          </div>
+          <div className="holiday-list" aria-live="polite">
+            <h3>Public holidays this month</h3>
+            {currentMonthHolidays.length ? <ul>{currentMonthHolidays.map(([date, name]) => <li key={date}><time dateTime={date}>{new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</time><span>{name}</span></li>)}</ul> : <p>No national public holidays this month.</p>}
+          </div>
+          <p className="calendar-note">Includes public holidays provided for by the Public Holidays Act and officially declared additional holidays.</p>
+        </section>
+        <section className="community-panel newsletter-panel" aria-labelledby="newsletter-title">
+          <p className="eyebrow">From the library</p>
+          <h2 id="newsletter-title">Community newsletter</h2>
+          <p>Get occasional updates about new books, reading ideas, and upcoming library news.</p>
+          <form className="newsletter-form" onSubmit={subscribeToNewsletter}>
+            <label htmlFor="newsletter-email">Email address</label>
+            <div className="newsletter-input-row"><input id="newsletter-email" type="email" autoComplete="email" required value={newsletterEmail} onChange={(event) => setNewsletterEmail(event.target.value)} placeholder="you@example.com" /><button type="submit">Subscribe</button></div>
+          </form>
+          <p className="newsletter-privacy">Subscribe to receive occasional library updates. You can unsubscribe at any time by contacting the library.</p>
+          {newsletterMessage && <p className={`newsletter-feedback ${newsletterState}`} role="status">{newsletterMessage}</p>}
+        </section>
       </div>
     </section>
   );
@@ -331,16 +462,23 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
     <section className="auth-page">
       <div className="auth-copy">
         <button type="button" className="link-button" onClick={() => setAuthScreen('entry')}>Back to portal</button>
-        <p className="eyebrow">{mode === 'register' ? 'New library user' : role === 'admin' ? 'Staff access' : 'Member access'}</p>
-        <h2>{title}</h2>
-        <p>
-          {mode === 'register'
-            ? 'Create your account to browse the catalogue, borrow books, and manage payments.'
-            : 'Sign in to continue to your dashboard and manage your library tasks.'}
-        </p>
+        <div className="auth-copy-layout">
+          <div className="auth-copy-text">
+            <p className="eyebrow">{mode === 'register' ? 'A new chapter starts here' : role === 'admin' ? 'Library team' : 'Welcome back'}</p>
+            <h2>{mode === 'register' ? 'Make yourself at home.' : role === 'admin' ? 'Good to see you.' : 'Ready for your next read?'}</h2>
+            <p>
+              {mode === 'register'
+                ? 'Create your account and start exploring the collection.'
+                : role === 'admin'
+                  ? 'Sign in to care for the collection and support your readers.'
+                  : 'Sign in to browse books and pick up where you left off.'}
+            </p>
+          </div>
+          <img className="auth-art" src={libraryBooks} alt="" />
+        </div>
       </div>
       <form className="panel auth-form" onSubmit={submit}>
-        <h3>{title}</h3>
+        <h3>{mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
         <label>
           Username
           <input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
@@ -348,7 +486,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         {mode === 'register' && (
           <label>
             Email
-          <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
+            <input type="text" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
           </label>
         )}
         <label>
@@ -397,9 +535,14 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
     <section className="auth-page">
       <div className="auth-copy">
         <button type="button" className="link-button" onClick={() => setAuthScreen('login-user')}>Back to login</button>
-        <p className="eyebrow">Account recovery</p>
-        <h2>Reset your password</h2>
-        <p>{step === 'request' ? 'Enter your account details to request a one-time reset code.' : 'Enter the one-time code and choose a new password.'}</p>
+        <div className="auth-copy-layout">
+          <div className="auth-copy-text">
+            <p className="eyebrow">Account recovery</p>
+            <h2>Let's get you back in.</h2>
+            <p>{step === 'request' ? 'Enter your account details to request a one-time reset code.' : 'Enter the one-time code and choose a new password.'}</p>
+          </div>
+          <img className="auth-art" src={libraryBooks} alt="" />
+        </div>
       </div>
       {step === 'request' ? (
         <form className="panel auth-form" onSubmit={requestCode}>
@@ -423,8 +566,8 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
 
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['reservations', 'Reservations'], ['users', 'Users'], ['reports', 'Reports']]
-    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['my-books', 'My Books'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['fines', 'Fines']];
+    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['reservations', 'Reservations'], ['users', 'Members'], ['reports', 'Reports'], ['account', 'Account']]
+    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['my-books', 'My Books'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['account', 'Account']];
 
   return (
     <nav className="tabs">
@@ -437,12 +580,12 @@ function Nav({ role, view, setView }) {
   );
 }
 
-function UserWorkspace({ api, view, setView, showMessage }) {
+function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, onDeactivated }) {
   if (view === 'dashboard') {
     return <UserDashboard setView={setView} />;
   }
-  if (view === 'my-books' || view === 'fines') {
-    return <BorrowedBooks api={api} finesOnly={view === 'fines'} showMessage={showMessage} />;
+  if (view === 'my-books') {
+    return <BorrowedBooks api={api} showMessage={showMessage} />;
   }
   if (view === 'reservations') {
     return <MyReservations api={api} showMessage={showMessage} />;
@@ -453,15 +596,19 @@ function UserWorkspace({ api, view, setView, showMessage }) {
   if (view === 'recommendations') {
     return <Recommendations api={api} showMessage={showMessage} />;
   }
+  if (view === 'account') {
+    return <AccountSettings api={api} user={user} onUserChange={onUserChange} onDeactivated={onDeactivated} showMessage={showMessage} />;
+  }
   return <BookBrowser api={api} canBorrow showMessage={showMessage} />;
 }
 
-function AdminWorkspace({ api, view, setView, showMessage }) {
+function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage }) {
   const [summary, setSummary] = useState(null);
+  const loadSummary = useCallback(() => api.get('/api/admin/summary/').then(setSummary).catch((error) => showMessage(error.message)), [api, showMessage]);
 
   useEffect(() => {
-    api.get('/api/admin/summary/').then(setSummary).catch((error) => showMessage(error.message));
-  }, [api, showMessage]);
+    loadSummary();
+  }, [loadSummary]);
 
   if (!summary) {
     return <section className="panel">Loading admin data...</section>;
@@ -480,20 +627,10 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
     return <ReservationTable reservations={summary.reservations} />;
   }
   if (view === 'users') {
-    return (
-      <section className="panel">
-        <h2>Users</h2>
-        <div className="table">
-          {summary.users.map((item) => (
-            <div className="row" key={item.id}>
-              <span>{item.username}</span>
-              <span>{item.email || 'No email'}</span>
-              <span className="badge">{item.role}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-    );
+    return <UserManager users={summary.users} api={api} reload={loadSummary} showMessage={showMessage} />;
+  }
+  if (view === 'account') {
+    return <AccountSettings api={api} user={user} onUserChange={onUserChange} showMessage={showMessage} />;
   }
   if (view === 'reports') {
     return (
@@ -501,7 +638,7 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
         <div className="report-heading">
           <div>
             <h2>Library Administration Report</h2>
-            <p>Borrowing, outstanding balances, and successful login activity.</p>
+            <p>Catalogue holdings, borrowing, reservations, and successful login activity.</p>
           </div>
           <div className="report-actions">
             <button type="button" className="secondary" onClick={() => { window.location.href = '/api/admin/reports/download/'; }}>Download CSV</button>
@@ -510,26 +647,83 @@ function AdminWorkspace({ api, view, setView, showMessage }) {
         </div>
         <div className="stats-grid compact">
           <Stat label="Books in catalogue" value={summary.stats.total_books} />
+          <Stat label="Total copies" value={summary.stats.total_copies} />
           <Stat label="Borrowed (all time)" value={summary.report_stats.total_borrowed} />
-          <Stat label="Books currently owed" value={summary.report_stats.books_owed} />
-          <Stat label="Outstanding amount" value={`R${Number(summary.report_stats.amount_owed).toFixed(2)}`} />
           <Stat label="Active reservations" value={summary.stats.active_reservations} />
         </div>
-        <ReportTable title="Borrowing Records" columns={['Borrower', 'Book', 'Borrowed', 'Due', 'Status', 'Fine', 'Paid']} rows={summary.records.map((record) => [
+        <ReportTable title="Borrowing Records" columns={['Borrower', 'Book', 'Borrowed', 'Due', 'Status']} rows={summary.records.map((record) => [
           record.user.username, record.book.title, record.borrow_date, record.due_date, record.status,
-          `R${Number(record.fine_amount).toFixed(2)}`, record.fine_paid ? 'Yes' : 'No',
         ])} emptyText="No borrowing records yet." />
-        <ReportTable title="Active Reservation Queue" columns={['Student', 'Book', 'Queue position', 'Status', 'Reserved at']} rows={summary.reservations.map((reservation) => [
+        <ReportTable title="Active Reservation Queue" columns={['Member', 'Book', 'Queue position', 'Status', 'Reserved at']} rows={summary.reservations.map((reservation) => [
           reservation.user.username, reservation.book.title, reservation.queue_position, reservation.status, new Date(reservation.created_at).toLocaleString(),
         ])} emptyText="No active reservations." />
         <ReportTable title="Successful Login History" columns={['Username', 'Email', 'Role', 'Logged in at']} rows={summary.login_activities.map((activity) => [
-          activity.user.username, activity.user.email || 'No email', activity.user.role,
+          activity.user.username, activity.user.email || 'No email', activity.user.role === 'user' ? 'Member' : 'Admin',
           new Date(activity.logged_in_at).toLocaleString(),
-        ])} emptyText="Login history will appear after users sign in." />
+        ])} emptyText="Login history will appear after members sign in." />
       </section>
     );
   }
   return null;
+}
+
+function UserManager({ users, api, reload, showMessage }) {
+  async function removeUser(item) {
+    if (!window.confirm(`Remove ${item.username}? This permanently deletes their account and related library activity.`)) return;
+    try {
+      await api.delete(`/api/admin/users/${item.id}/`);
+      await reload();
+      showMessage(`${item.username} was removed.`);
+    } catch (error) { showMessage(error.message); }
+  }
+  return <section className="panel user-manager">
+    <div className="section-heading"><div><p className="eyebrow">Member directory</p><h2>Members</h2><p>Removing a member permanently clears their account and connected library activity.</p></div></div>
+    <div className="table">
+      {users.map((item) => <div className="row user-row" key={item.id}>
+        <div><strong>{item.username}</strong><span>{item.email || 'No email'}</span></div>
+        <span className={`badge ${item.role !== 'admin' && !item.is_active ? 'danger-badge' : ''}`}>{item.role === 'admin' ? 'Admin' : item.is_active ? 'Active member' : 'Deactivated'}</span>
+        {item.role === 'user' ? <button type="button" className="danger" onClick={() => removeUser(item)}>Remove member</button> : <span className="admin-protected">Protected</span>}
+      </div>)}
+    </div>
+  </section>;
+}
+
+function AccountSettings({ api, user, onUserChange, onDeactivated, showMessage }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+
+  async function updatePhoto(file) {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) return showMessage('Choose a PNG, JPEG, WEBP, or GIF image.');
+    if (file.size > 1500000) return showMessage('Choose an image smaller than 1.5 MB.');
+    const photo = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
+    setPhotoBusy(true);
+    try {
+      const data = await api.put('/api/account/profile-photo/', { photo });
+      onUserChange(data.user);
+      showMessage('Profile photo updated.');
+    } catch (error) { showMessage(error.message); } finally { setPhotoBusy(false); }
+  }
+
+  async function removePhoto() {
+    setPhotoBusy(true);
+    try {
+      const data = await api.delete('/api/account/profile-photo/');
+      onUserChange(data.user);
+      showMessage('Profile photo removed.');
+    } catch (error) { showMessage(error.message); } finally { setPhotoBusy(false); }
+  }
+
+  async function deactivate() {
+    setBusy(true);
+    try {
+      await api.post('/api/account/deactivate/');
+      onDeactivated();
+      showMessage('Your account has been deactivated.');
+    } catch (error) { showMessage(error.message); setBusy(false); }
+  }
+  return <section className="panel account-panel"><p className="eyebrow">Account settings</p><h2>Manage your profile</h2><p>Choose a photo to personalise your library account. It appears alongside your name while you are signed in.</p><div className="profile-photo-editor"><div className="profile-photo-preview">{user.profile_photo ? <img src={user.profile_photo} alt="Your profile" /> : <span>{user.username.slice(0, 1).toUpperCase()}</span>}</div><div><strong>{user.username}</strong><span className="profile-role">{user.role === 'admin' ? 'Library administrator' : 'Library member'}</span><label className="photo-upload">{photoBusy ? 'Saving photo...' : 'Choose profile photo'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={photoBusy} onChange={(event) => { updatePhoto(event.target.files?.[0]).catch(() => showMessage('Could not read that image.')); event.target.value = ''; }} /></label>{user.profile_photo && <button type="button" className="link-button" onClick={removePhoto} disabled={photoBusy}>Remove photo</button>}<small>PNG, JPEG, WEBP, or GIF — maximum 1.5 MB.</small></div></div>{user.role === 'user' && <div className="danger-zone"><div><strong>Deactivate account</strong><span>Signing in, borrowing, reservations, and notifications will no longer be available.</span></div>{confirming ? <div className="confirm-actions"><button type="button" className="secondary" onClick={() => setConfirming(false)} disabled={busy}>Keep account</button><button type="button" className="danger" onClick={deactivate} disabled={busy}>{busy ? 'Deactivating...' : 'Confirm deactivation'}</button></div> : <button type="button" className="danger" onClick={() => setConfirming(true)}>Deactivate account</button>}</div>}</section>;
 }
 
 function ReportTable({ title, columns, rows, emptyText }) {
@@ -564,9 +758,12 @@ function UserDashboard({ setView }) {
   return (
     <section className="dashboard">
       <div className="dashboard-intro">
-        <p className="eyebrow">User Dashboard</p>
-        <h2>Welcome back to your library workspace.</h2>
-        <p>Browse available books, search the catalogue, check borrowed items, and settle outstanding fines.</p>
+        <div className="dashboard-intro-copy">
+          <p className="eyebrow">Member Dashboard</p>
+          <h2>Welcome back to your library workspace.</h2>
+          <p>Browse available books, search the catalogue, and check borrowed items.</p>
+        </div>
+        <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
       </div>
       <div className="dashboard-grid">
         <DashboardAction tone="blue" title="View Books" text="See all available books in the library." action="Open catalogue" onClick={() => setView('books')} />
@@ -574,7 +771,6 @@ function UserDashboard({ setView }) {
         <DashboardAction tone="green" title="Recommended Books" text="Browse suggested books selected from available library titles." action="Explore picks" onClick={() => setView('recommendations')} />
         <DashboardAction tone="amber" title="My Borrowed Books" text="View books you have borrowed and return them." action="View records" onClick={() => setView('my-books')} />
         <DashboardAction tone="green" title="My Reservations" text="Track your place in book waiting lists." action="View queue" onClick={() => setView('reservations')} />
-        <DashboardAction tone="red" title="Fine Payment" text="View and pay your outstanding fines." action="Pay fines" onClick={() => setView('fines')} />
       </div>
     </section>
   );
@@ -585,23 +781,26 @@ function AdminDashboard({ summary, setView }) {
     <section className="dashboard">
       <div className="admin-overview-grid">
         <div className="dashboard-intro admin-intro">
-          <p className="eyebrow">Admin Dashboard</p>
-          <h2>Control the library catalogue and daily borrowing work.</h2>
-          <p>Use the admin tools to maintain books, view users, inspect borrowed records, and track activity.</p>
+          <div className="dashboard-intro-copy">
+            <p className="eyebrow">Admin Dashboard</p>
+            <h2>Control the library catalogue and daily borrowing work.</h2>
+            <p>Use the admin tools to maintain books, view members, inspect borrowed records, and track activity.</p>
+          </div>
+          <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
         </div>
         <div className="admin-stat-grid">
           <Stat label="Total books" value={summary.stats.total_books} />
           <Stat label="Borrowed" value={summary.stats.total_borrowed} />
           <Stat label="Returned" value={summary.stats.total_returned} />
-          <Stat label="Users" value={summary.stats.total_users} />
+          <Stat label="Members" value={summary.stats.total_users} />
           <Stat label="Reservations" value={summary.stats.active_reservations} />
         </div>
       </div>
       <div className="dashboard-grid">
         <DashboardAction tone="blue" title="Manage Books" text="Add, update, and delete books." action="Manage" onClick={() => setView('books')} />
-        <DashboardAction tone="cyan" title="Manage Users" text="View all users and admins." action="View users" onClick={() => setView('users')} />
+        <DashboardAction tone="cyan" title="Manage Members" text="View library members and administrators." action="View members" onClick={() => setView('users')} />
         <DashboardAction tone="amber" title="View Borrowed Books" text="See all borrowed books." action="View records" onClick={() => setView('borrowed')} />
-        <DashboardAction tone="red" title="Reservation Queue" text="View students waiting for unavailable books." action="Open queue" onClick={() => setView('reservations')} />
+        <DashboardAction tone="red" title="Reservation Queue" text="View members waiting for unavailable books." action="Open queue" onClick={() => setView('reservations')} />
         <DashboardAction tone="green" title="View Reports" text="Review totals and library activity." action="Open reports" onClick={() => setView('reports')} />
       </div>
     </section>
@@ -867,11 +1066,12 @@ function Recommendations({ api, showMessage }) {
   return (
     <section className="recommendations-page">
       <div className="recommendations-hero">
-        <div>
+        <div className="page-hero-copy">
           <p className="eyebrow">Book Recommendations</p>
           <h2>Chat with your personal reading advisor.</h2>
           <p>Type what you love, what you need, or what mood you want. The advisor will shape recommendations around you.</p>
         </div>
+        <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
       </div>
       <div className="recommendation-chat">
         <div className="advisor-topline">
@@ -919,7 +1119,7 @@ function Recommendations({ api, showMessage }) {
       <div className="book-grid">
         {recommendedBooks.map((book) => (
           <article className="book-card recommendation-card" key={book.id}>
-            <img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy" />
+            <div className="book-3d"><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy" /></div>
             <div>
               <h3>{book.title}</h3>
               <p>{book.author}</p>
@@ -970,11 +1170,12 @@ function BookBrowser({ api, canBorrow, showMessage }) {
   return (
     <section className="books-page">
       <div className="books-hero">
-        <div>
+        <div className="page-hero-copy">
           <p className="eyebrow">Library Catalogue</p>
           <h2>Find your next book from the shelves.</h2>
           <p>Search by title, author, ISBN, or category and borrow available books directly from your workspace.</p>
         </div>
+        <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
       </div>
       <div className="panel">
       <div className="toolbar">
@@ -987,7 +1188,7 @@ function BookBrowser({ api, canBorrow, showMessage }) {
       <div className="book-grid">
         {books.map((book) => (
           <article className="book-card" key={book.id}>
-            <img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy" />
+            <div className="book-3d"><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy" /></div>
             <div>
               <h3>{book.title}</h3>
               <p>{book.author}</p>
@@ -1121,10 +1322,8 @@ function MyReservations({ api, showMessage }) {
   );
 }
 
-function BorrowedBooks({ api, finesOnly, showMessage }) {
+function BorrowedBooks({ api, showMessage }) {
   const [records, setRecords] = useState([]);
-  const [paymentMethod, setPaymentMethod] = useState('card');
-  const [receipt, setReceipt] = useState(null);
 
   async function loadRecords() {
     const data = await api.get('/api/my-books/');
@@ -1135,127 +1334,31 @@ function BorrowedBooks({ api, finesOnly, showMessage }) {
     loadRecords().catch((error) => showMessage(error.message));
   }, []);
 
-  async function act(path, success, body = {}) {
+  async function returnBook(record) {
     try {
-      const data = await api.post(path, body);
-      showMessage(success);
-      loadRecords();
-      return data;
+      await api.post('/api/my-books/' + record.id + '/return/');
+      showMessage('Book returned.');
+      await loadRecords();
     } catch (error) {
       showMessage(error.message);
-      return null;
     }
-  }
-
-  const visibleRecords = finesOnly
-    ? records.filter((record) => Number(record.fine_amount) > 0 && !record.fine_paid)
-    : records;
-  const totalFine = visibleRecords.reduce((total, record) => total + Number(record.fine_amount), 0);
-  const paymentLabel = {
-    card: 'Bank card',
-    eft: 'EFT',
-    cash: 'Cash at library desk',
-  }[paymentMethod];
-
-  async function payFine(record) {
-    const data = await act(
-      `/api/my-books/${record.id}/pay-fine/`,
-      `Fine paid by ${paymentLabel}.`,
-      { payment_method: paymentMethod },
-    );
-
-    if (!data?.record) {
-      return;
-    }
-
-    setReceipt({
-      receiptNumber: `LMS-${data.record.id}-${Date.now().toString().slice(-6)}`,
-      paidAt: new Date().toLocaleString(),
-      student: data.record.user.username,
-      book: data.record.book.title,
-      amount: data.record.fine_amount,
-      method: paymentLabel,
-      status: 'Paid',
-    });
   }
 
   return (
     <section className="panel">
-      <div className="fine-heading">
-        <h2>{finesOnly ? 'Outstanding Fines' : 'My Borrowed Books'}</h2>
-        {finesOnly && (
-          <strong className="fine-total">Total: R{totalFine.toFixed(2)}</strong>
-        )}
-      </div>
-      {finesOnly && (
-        <div className="payment-panel">
-          <div>
-            <p className="eyebrow">Payment Option</p>
-            <h3>Choose how you want to pay</h3>
-          </div>
-          <div className="payment-options">
-            <label className={paymentMethod === 'card' ? 'payment-option active' : 'payment-option'}>
-              <input type="radio" name="payment" value="card" checked={paymentMethod === 'card'} onChange={(event) => setPaymentMethod(event.target.value)} />
-              <span>Bank card</span>
-            </label>
-            <label className={paymentMethod === 'eft' ? 'payment-option active' : 'payment-option'}>
-              <input type="radio" name="payment" value="eft" checked={paymentMethod === 'eft'} onChange={(event) => setPaymentMethod(event.target.value)} />
-              <span>EFT</span>
-            </label>
-            <label className={paymentMethod === 'cash' ? 'payment-option active' : 'payment-option'}>
-              <input type="radio" name="payment" value="cash" checked={paymentMethod === 'cash'} onChange={(event) => setPaymentMethod(event.target.value)} />
-              <span>Cash</span>
-            </label>
-          </div>
-        </div>
-      )}
+      <h2>My Borrowed Books</h2>
+      <p className="loan-policy-note">Please return each book by its due date. Books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
       <div className="table">
-        {visibleRecords.map((record) => (
+        {records.map((record) => (
           <div className="row" key={record.id}>
             <span>{record.book.title}</span>
             <span>{record.status}</span>
             <span>Due {record.due_date}</span>
-            <span>R{record.fine_amount}</span>
-            {!finesOnly && record.status !== 'returned' && (
-              <button type="button" onClick={() => act(`/api/my-books/${record.id}/return/`, 'Book returned.')}>Return</button>
-            )}
-            {finesOnly && (
-              record.status === 'returned'
-                ? <button type="button" onClick={() => payFine(record)}>Pay</button>
-                : <span className="badge danger-badge">Return first</span>
-            )}
+            {record.status !== 'returned' && <button type="button" onClick={() => returnBook(record)}>Return</button>}
           </div>
         ))}
-        {visibleRecords.length === 0 && (
-          <div className="empty-state">No outstanding fines.</div>
-        )}
+        {!records.length && <div className="empty-state">You have no borrowed books.</div>}
       </div>
-      {finesOnly && receipt && (
-        <div className="receipt">
-          <div className="receipt-header">
-            <div>
-              <p className="eyebrow">Payment Receipt</p>
-              <h3>Library Fine Receipt</h3>
-            </div>
-            <strong>{receipt.status}</strong>
-          </div>
-          <div className="receipt-grid">
-            <span>Receipt No.</span>
-            <strong>{receipt.receiptNumber}</strong>
-            <span>Date</span>
-            <strong>{receipt.paidAt}</strong>
-            <span>Student</span>
-            <strong>{receipt.student}</strong>
-            <span>Book</span>
-            <strong>{receipt.book}</strong>
-            <span>Payment Method</span>
-            <strong>{receipt.method}</strong>
-            <span>Amount Paid</span>
-            <strong>R{Number(receipt.amount).toFixed(2)}</strong>
-          </div>
-          <button type="button" className="primary print-button" onClick={() => window.print()}>Print Receipt</button>
-        </div>
-      )}
     </section>
   );
 }
@@ -1352,9 +1455,9 @@ function RecordTable({ records }) {
             <span>{record.book.title}</span>
             <span>{record.status}</span>
             <span>Due {record.due_date}</span>
-            <span>R{record.fine_amount}</span>
           </div>
         ))}
+        {!records.length && <div className="empty-state">No borrowing records yet.</div>}
       </div>
     </section>
   );
@@ -1373,7 +1476,7 @@ function ReservationTable({ reservations }) {
             <span className={reservation.status === 'ready' ? 'badge ready-badge' : 'badge'}>{reservation.status}</span>
           </div>
         ))}
-        {!reservations.length && <div className="empty-state">No students are waiting for a book.</div>}
+        {!reservations.length && <div className="empty-state">No members are waiting for a book.</div>}
       </div>
     </section>
   );

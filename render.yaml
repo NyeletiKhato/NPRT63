@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: library-management-system
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/session/
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: LIBRARY_DB_PATH
+        value: /var/data/library.db
+    disk:
+      name: library-data
+      mountPath: /var/data
+      sizeGB: 1

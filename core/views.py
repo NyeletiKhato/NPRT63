@@ -15,8 +15,6 @@ from .models import CustomUser, Book, BorrowRecord, LoginActivity
 from .forms import RegisterForm, BookForm
 from django.utils import timezone
 
-FINE_PER_DAY = 20
-
 
 def _record_login(user):
     """Keep a separate audit trail; Django's last_login only retains one login."""
@@ -24,19 +22,13 @@ def _record_login(user):
 
 
 def _report_data():
-    """Refresh fines first so report figures reflect today's outstanding amounts."""
     records = BorrowRecord.objects.select_related('user', 'book').all().order_by('-borrow_date')
-    for record in records:
-        _update_record_fine(record)
-
-    outstanding_records = records.filter(status__in=['borrowed', 'overdue'])
-    unpaid_fines = records.filter(fine_amount__gt=0, fine_paid=False)
     return {
         'generated_at': timezone.localtime(),
         'total_books': Book.objects.count(),
+        'total_copies': Book.objects.aggregate(total=Sum('quantity'))['total'] or 0,
         'total_borrowed': records.count(),
-        'books_owed': outstanding_records.count(),
-        'amount_owed': unpaid_fines.aggregate(total=Sum('fine_amount'))['total'] or 0,
+        'books_currently_borrowed': records.filter(status__in=['borrowed', 'overdue']).count(),
         'records': records,
         'login_activities': LoginActivity.objects.select_related('user').all(),
     }
@@ -93,8 +85,6 @@ def _borrow_record_json(record):
         'borrow_date': record.borrow_date.isoformat() if record.borrow_date else None,
         'due_date': record.due_date.isoformat() if record.due_date else None,
         'return_date': record.return_date.isoformat() if record.return_date else None,
-        'fine_amount': str(record.fine_amount),
-        'fine_paid': record.fine_paid,
         'status': record.status,
     }
 
@@ -105,26 +95,6 @@ def _login_activity_json(activity):
         'user': _user_json(activity.user),
         'logged_in_at': activity.logged_in_at.isoformat(),
     }
-
-
-def _update_record_fine(record, save=True):
-    if not record.due_date:
-        return record
-
-    today = timezone.now().date()
-    end_date = record.return_date or today
-
-    if end_date > record.due_date and record.status in ['borrowed', 'overdue', 'returned']:
-        days_late = (end_date - record.due_date).days
-        record.fine_amount = days_late * FINE_PER_DAY
-        if record.status == 'borrowed':
-            record.status = 'overdue'
-    elif record.status != 'returned':
-        record.fine_amount = 0
-
-    if save:
-        record.save(update_fields=['fine_amount', 'status'])
-    return record
 
 
 def _require_authenticated(request):
@@ -138,7 +108,8 @@ def _require_role(request, role):
     if auth_error:
         return auth_error
     if request.user.role != role:
-        return JsonResponse({'error': f'{role.title()} access required.'}, status=403)
+        label = 'Member' if role == 'user' else role.title()
+        return JsonResponse({'error': f'{label} access required.'}, status=403)
     return None
 
 
@@ -173,7 +144,7 @@ def api_login(request):
     if role == 'admin' and user.role != 'admin':
         return JsonResponse({'error': 'You are not an admin.'}, status=403)
     if role == 'user' and user.role != 'user':
-        return JsonResponse({'error': 'You are not a normal user.'}, status=403)
+        return JsonResponse({'error': 'You are not a library member.'}, status=403)
 
     login(request, user)
     _record_login(user)
@@ -300,9 +271,6 @@ def api_my_books(request):
         user=request.user
     ).select_related('book', 'user').order_by('-borrow_date')
 
-    for record in borrowed_books:
-        _update_record_fine(record)
-
     return JsonResponse({'records': [_borrow_record_json(record) for record in borrowed_books]})
 
 
@@ -319,7 +287,6 @@ def api_return_book(request, record_id):
     today = timezone.now().date()
     record.return_date = today
     record.status = 'returned'
-    _update_record_fine(record, save=False)
     record.save()
 
     book = _normalize_book_inventory(record.book)
@@ -329,24 +296,6 @@ def api_return_book(request, record_id):
 
 
 @require_POST
-def api_pay_fine(request, record_id):
-    role_error = _require_role(request, 'user')
-    if role_error:
-        return role_error
-
-    record = get_object_or_404(BorrowRecord, id=record_id, user=request.user)
-    if record.fine_amount <= 0:
-        return JsonResponse({'error': 'There is no fine to pay for this book.'}, status=400)
-    if record.status != 'returned':
-        return JsonResponse({'error': 'Return this book before paying the final fine.'}, status=400)
-    if record.fine_paid:
-        return JsonResponse({'error': 'This fine has already been paid.'}, status=400)
-
-    record.fine_paid = True
-    record.save()
-    return JsonResponse({'record': _borrow_record_json(record)})
-
-
 def api_admin_summary(request):
     role_error = _require_role(request, 'admin')
     if role_error:
@@ -357,15 +306,12 @@ def api_admin_summary(request):
     return JsonResponse({
         'stats': {
             'total_books': Book.objects.count(),
+            'total_copies': Book.objects.aggregate(total=Sum('quantity'))['total'] or 0,
             'total_borrowed': BorrowRecord.objects.filter(status='borrowed').count(),
             'total_returned': BorrowRecord.objects.filter(status='returned').count(),
             'total_users': CustomUser.objects.filter(role='user').count(),
         },
-        'report_stats': {
-            'total_borrowed': report['total_borrowed'],
-            'books_owed': report['books_owed'],
-            'amount_owed': str(report['amount_owed']),
-        },
+        'report_stats': {'total_borrowed': report['total_borrowed']},
         'users': [_user_json(user) for user in CustomUser.objects.all().order_by('username')],
         'records': [_borrow_record_json(record) for record in records],
         'login_activities': [_login_activity_json(activity) for activity in report['login_activities']],
@@ -400,7 +346,7 @@ def custom_login_view(request):
                 return redirect('/login/?role=admin')
 
             if role == 'user' and user.role != 'user':
-                messages.error(request, "You are not a normal user.")
+                messages.error(request, "You are not a library member.")
                 return redirect('/login/?role=user')
 
             login(request, user)
@@ -463,7 +409,7 @@ def view_books(request):
 @require_POST
 def borrow_book(request, book_id):
     if request.user.role != 'user':
-        messages.error(request, "Only users can borrow books.")
+        messages.error(request, "Only library members can borrow books.")
         return redirect('redirect_dashboard')
 
     with transaction.atomic():
@@ -498,9 +444,6 @@ def my_borrowed_books(request):
         return redirect('redirect_dashboard')
 
     borrowed_books = BorrowRecord.objects.filter(user=request.user).order_by('-borrow_date')
-
-    for record in borrowed_books:
-        _update_record_fine(record)
 
     return render(request, 'core/my_borrowed_books.html', {'borrowed_books': borrowed_books})
 @login_required
@@ -543,15 +486,15 @@ def download_admin_report(request):
     writer.writerow([])
     writer.writerow(['Summary'])
     writer.writerow(['Books in catalogue', report['total_books']])
+    writer.writerow(['Total copies in catalogue', report['total_copies']])
     writer.writerow(['Books borrowed (all time)', report['total_borrowed']])
-    writer.writerow(['Books currently owed', report['books_owed']])
-    writer.writerow(['Outstanding amount (R)', report['amount_owed']])
+    writer.writerow(['Books currently borrowed', report['books_currently_borrowed']])
     writer.writerow([])
     writer.writerow(['Borrowing records'])
-    writer.writerow(['Borrower', 'Book', 'Borrowed on', 'Due on', 'Status', 'Fine (R)', 'Fine paid'])
+    writer.writerow(['Borrower', 'Book', 'Borrowed on', 'Due on', 'Status'])
     for record in report['records']:
         writer.writerow([record.user.username, record.book.title, record.borrow_date, record.due_date,
-                         record.get_status_display(), record.fine_amount, 'Yes' if record.fine_paid else 'No'])
+                         record.get_status_display()])
     writer.writerow([])
     writer.writerow(['Successful login history'])
     writer.writerow(['Username', 'Email', 'Role', 'Logged in at'])
@@ -641,80 +584,16 @@ def return_book(request, record_id):
         return redirect('redirect_dashboard')
 
     record = get_object_or_404(BorrowRecord, id=record_id, user=request.user)
-
     if record.status == 'returned':
         messages.warning(request, "This book has already been returned.")
         return redirect('my_borrowed_books')
 
-    today = timezone.now().date()
-    record.return_date = today
+    record.return_date = timezone.now().date()
     record.status = 'returned'
+    record.save(update_fields=['return_date', 'status'])
 
-    _update_record_fine(record, save=False)
-    record.save()
-
-    # Increase available copies
     book = _normalize_book_inventory(record.book)
     book.available_copies = min(book.available_copies + 1, book.quantity)
     book.save()
-
-    if record.fine_amount > 0:
-        messages.warning(
-            request,
-            f'Book returned successfully. Late fine charged: R{record.fine_amount}'
-        )
-    else:
-        messages.success(request, "Book returned successfully with no fine.")
-
+    messages.success(request, "Book returned successfully.")
     return redirect('my_borrowed_books')
-@login_required
-def fine_payment_page(request):
-    if request.user.role != 'user':
-        return redirect('redirect_dashboard')
-
-    for record in BorrowRecord.objects.filter(user=request.user, fine_paid=False):
-        _update_record_fine(record)
-
-    unpaid_fines = BorrowRecord.objects.filter(
-        user=request.user,
-        fine_amount__gt=0,
-        fine_paid=False
-    ).order_by('-return_date')
-
-    return render(request, 'core/fine_payment.html', {
-        'unpaid_fines': unpaid_fines
-    })
-
-
-@login_required
-def pay_fine(request, record_id):
-    if request.user.role != 'user':
-        return redirect('redirect_dashboard')
-
-    record = get_object_or_404(
-        BorrowRecord,
-        id=record_id,
-        user=request.user
-    )
-
-    if record.fine_amount <= 0:
-        messages.warning(request, "There is no fine to pay for this book.")
-        return redirect('fine_payment')
-
-    if record.status != 'returned':
-        messages.warning(request, "Return this book before paying the final fine.")
-        return redirect('fine_payment')
-
-    if record.fine_paid:
-        messages.info(request, "This fine has already been paid.")
-        return redirect('fine_payment')
-
-    if request.method == 'POST':
-        record.fine_paid = True
-        record.save()
-        messages.success(request, f'Fine of R{record.fine_amount} paid successfully.')
-        return redirect('fine_payment')
-
-    return render(request, 'core/pay_fine_confirm.html', {
-        'record': record
-    })
