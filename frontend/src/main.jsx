@@ -161,6 +161,7 @@ function App() {
     get: (path) => request(path),
     post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body || {}) }, csrfToken),
     put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body || {}) }, csrfToken),
+    upload: (path, file) => request(path, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file }, csrfToken),
     delete: (path) => request(path, { method: 'DELETE' }, csrfToken),
   }), [csrfToken]);
 
@@ -621,7 +622,7 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
     return <BookManager api={api} showMessage={showMessage} />;
   }
   if (view === 'borrowed') {
-    return <RecordTable records={summary.records} />;
+    return <RecordTable records={summary.records} api={api} reload={loadSummary} showMessage={showMessage} />;
   }
   if (view === 'reservations') {
     return <ReservationTable reservations={summary.reservations} />;
@@ -818,6 +819,7 @@ function Stat({ label, value }) {
 
 function Recommendations({ api, showMessage }) {
   const [books, setBooks] = useState([]);
+  const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
   const [input, setInput] = useState('');
   const [profile, setProfile] = useState({
     categories: [],
@@ -835,7 +837,7 @@ function Recommendations({ api, showMessage }) {
   useEffect(() => {
     api.get('/api/books/')
       .then((data) => {
-        const availableBooks = data.books.filter((book) => book.available_copies > 0);
+        const availableBooks = data.books.filter((book) => book.available_copies > 0 || book.has_virtual_version);
         setBooks(availableBooks);
       })
       .catch((error) => showMessage(error.message));
@@ -1044,17 +1046,6 @@ function Recommendations({ api, showMessage }) {
     return reasons.slice(0, 2).join(' and ') || 'is available and close to your reading profile';
   }
 
-  async function borrowRecommended(book) {
-    try {
-      await api.post(`/api/books/${book.id}/borrow/`);
-      showMessage(`Borrowed ${book.title}.`);
-      const data = await api.get('/api/books/');
-      setBooks(data.books.filter((item) => item.available_copies > 0));
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
-
   const recommendedBooks = [...books]
     .map((book) => ({ ...book, score: recommendationScore(book) }))
     .sort((a, b) => b.score - a.score || b.available_copies - a.available_copies)
@@ -1127,10 +1118,30 @@ function Recommendations({ api, showMessage }) {
               <small className="match-score">{book.score > 0 ? `${book.score} match points` : 'Popular available title'}</small>
               <small className="recommendation-reason">Recommended because it {recommendationReason(book)}.</small>
             </div>
-            <button type="button" onClick={() => borrowRecommended(book)}>Borrow</button>
+            <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>
           </article>
         ))}
       </div>
+      {borrowChoiceBook && <BorrowFormatDialog
+        api={api}
+        book={borrowChoiceBook}
+        onClose={() => setBorrowChoiceBook(null)}
+        onBorrowed={async () => {
+          setBorrowChoiceBook(null);
+          const data = await api.get('/api/books/');
+          setBooks(data.books.filter((item) => item.available_copies > 0 || item.has_virtual_version));
+        }}
+        onReserve={async () => {
+          try {
+            const result = await api.post(`/api/books/${borrowChoiceBook.id}/reserve/`, {});
+            setBorrowChoiceBook(null);
+            showMessage(`Physical book reserved. Queue position: ${result.reservation.queue_position}.`);
+          } catch (error) {
+            showMessage(error.message);
+          }
+        }}
+        showMessage={showMessage}
+      />}
     </section>
   );
 }
@@ -1138,6 +1149,7 @@ function Recommendations({ api, showMessage }) {
 function BookBrowser({ api, canBorrow, showMessage }) {
   const [books, setBooks] = useState([]);
   const [query, setQuery] = useState('');
+  const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
 
   async function loadBooks(search = query) {
     const data = await api.get(`/api/books/?q=${encodeURIComponent(search)}`);
@@ -1147,16 +1159,6 @@ function BookBrowser({ api, canBorrow, showMessage }) {
   useEffect(() => {
     loadBooks('').catch((error) => showMessage(error.message));
   }, []);
-
-  async function borrow(book) {
-    try {
-      await api.post(`/api/books/${book.id}/borrow/`);
-      showMessage(`Borrowed ${book.title}.`);
-      await loadBooks();
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
 
   async function reserve(book) {
     try {
@@ -1193,18 +1195,76 @@ function BookBrowser({ api, canBorrow, showMessage }) {
               <h3>{book.title}</h3>
               <p>{book.author}</p>
               <span>{book.category} - ISBN {book.isbn}</span>
+              {book.has_virtual_version && <span className="format-badge virtual-badge">Virtual Book available</span>}
             </div>
             <div className="book-actions">
               <strong>{book.available_copies}/{book.quantity} available</strong>
-              {canBorrow && (book.available_copies > 0
-                ? <button type="button" onClick={() => borrow(book)}>Borrow</button>
-                : <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve</button>)}
+              {canBorrow && (book.available_copies > 0 || book.has_virtual_version
+                ? <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>
+                : <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>)}
+              {canBorrow && book.available_copies <= 0 && book.has_virtual_version && <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>}
             </div>
           </article>
         ))}
       </div>
       </div>
+      {borrowChoiceBook && <BorrowFormatDialog
+        api={api}
+        book={borrowChoiceBook}
+        onClose={() => setBorrowChoiceBook(null)}
+        onBorrowed={async () => { setBorrowChoiceBook(null); await loadBooks(); }}
+        onReserve={() => { setBorrowChoiceBook(null); reserve(borrowChoiceBook); }}
+        showMessage={showMessage}
+      />}
     </section>
+  );
+}
+
+function BorrowFormatDialog({ api, book, onClose, onBorrowed, onReserve, showMessage }) {
+  const [busy, setBusy] = useState(false);
+  const [choice, setChoice] = useState('');
+
+  async function borrow(format) {
+    setBusy(true);
+    setChoice(format);
+    try {
+      await api.post(`/api/books/${book.id}/borrow/`, { format });
+      showMessage(format === 'physical'
+        ? 'Your physical book has been reserved for collection. Please collect it from the library.'
+        : 'Virtual Book borrowed. Open My Borrowed Books to read or download it.');
+      await onBorrowed();
+    } catch (error) {
+      showMessage(error.message);
+    } finally {
+      setBusy(false);
+      setChoice('');
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <section className="borrow-dialog panel" role="dialog" aria-modal="true" aria-labelledby="borrow-choice-title">
+        <button className="dialog-close" type="button" aria-label="Close" onClick={onClose} disabled={busy}>×</button>
+        <p className="eyebrow">Borrow Book</p>
+        <h2 id="borrow-choice-title">How would you like to borrow this book?</h2>
+        <p className="dialog-book-title">{book.title} · {book.author}</p>
+        <div className="format-choice-grid">
+          {book.has_virtual_version && <article className="format-choice virtual-choice">
+            <span className="format-badge virtual-badge">Virtual Book</span>
+            <p>Read it in the library system or download it to your device.</p>
+            <button type="button" disabled={busy} onClick={() => borrow('virtual')}>{choice === 'virtual' ? 'Borrowing…' : 'Read / Borrow Virtual Book'}</button>
+          </article>}
+          <article className="format-choice physical-choice">
+            <span className="format-badge physical-badge">Physical Book</span>
+            <p>{book.available_copies > 0 ? 'Borrow the library copy and collect it from the library.' : 'There are no physical copies available right now.'}</p>
+            {book.available_copies > 0
+              ? <button type="button" disabled={busy} onClick={() => borrow('physical')}>{choice === 'physical' ? 'Borrowing…' : 'Borrow Physical Book'}</button>
+              : <button type="button" className="secondary" disabled={busy} onClick={onReserve}>Reserve Physical Copy</button>}
+          </article>
+        </div>
+        <button type="button" className="secondary dialog-cancel" onClick={onClose} disabled={busy}>Cancel</button>
+      </section>
+    </div>
   );
 }
 
@@ -1324,6 +1384,7 @@ function MyReservations({ api, showMessage }) {
 
 function BorrowedBooks({ api, showMessage }) {
   const [records, setRecords] = useState([]);
+  const [readerRecord, setReaderRecord] = useState(null);
 
   async function loadRecords() {
     const data = await api.get('/api/my-books/');
@@ -1344,20 +1405,84 @@ function BorrowedBooks({ api, showMessage }) {
     }
   }
 
+  if (readerRecord) {
+    return <BookReader api={api} record={readerRecord} onClose={() => setReaderRecord(null)} showMessage={showMessage} />;
+  }
+
   return (
     <section className="panel">
       <h2>My Borrowed Books</h2>
-      <p className="loan-policy-note">Please return each book by its due date. Books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
+      <p className="loan-policy-note">Please return physical books by their due date. Books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
       <div className="table">
-        {records.map((record) => (
-          <div className="row" key={record.id}>
-            <span>{record.book.title}</span>
+        {records.map((record) => {
+          const isVirtual = record.book_format === 'virtual';
+          const isActive = record.status !== 'returned';
+          return <div className="row borrowed-book-row" key={record.id}>
+            <span><strong>{record.book.title}</strong><small>{record.book.author}</small></span>
+            <span className={'format-badge ' + (isVirtual ? 'virtual-badge' : 'physical-badge')}>{isVirtual ? 'Virtual Book' : 'Physical Book'}</span>
             <span>{record.status}</span>
             <span>Due {record.due_date}</span>
-            {record.status !== 'returned' && <button type="button" onClick={() => returnBook(record)}>Return</button>}
-          </div>
-        ))}
+            {isVirtual && isActive && <div className="borrowed-book-actions">
+              <button type="button" onClick={() => setReaderRecord(record)}>Read Book</button>
+              <a className="button-link secondary" href={'/api/my-books/' + record.id + '/content/?download=1'}>Download Book</a>
+            </div>}
+            {!isVirtual && isActive && <span className={record.collection_confirmed ? 'collection-confirmed' : 'collection-required'}>
+              {record.collection_confirmed
+                ? 'Collection confirmed by the library. You can now return this book.'
+                : 'Collection Required: collect this book from the library. An administrator must confirm collection before you can return it.'}
+            </span>}
+            {isVirtual && isActive && <button type="button" className="secondary" onClick={() => returnBook(record)}>Return Book</button>}
+            {!isVirtual && isActive && record.collection_confirmed && <button type="button" className="secondary" onClick={() => returnBook(record)}>Return Book</button>}
+          </div>;
+        })}
         {!records.length && <div className="empty-state">You have no borrowed books.</div>}
+      </div>
+    </section>
+  );
+}
+
+function BookReader({ api, record, onClose, showMessage }) {
+  const [text, setText] = useState('');
+  const [page, setPage] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const isPdf = record.book.virtual_file_type === 'application/pdf';
+  const pages = isPdf ? [] : (text.match(/[\s\S]{1,3200}/g) || ['']);
+
+  useEffect(() => {
+    if (isPdf) return;
+    api.get('/api/my-books/' + record.id + '/read/')
+      .then((data) => setText(data.text))
+      .catch((error) => showMessage(error.message));
+  }, [api, record.id, isPdf, showMessage]);
+
+  const pdfSource = '/api/my-books/' + record.id + '/content/#page=' + (page + 1) + '&zoom=' + Math.round(zoom * 100);
+  return (
+    <section className="panel book-reader">
+      <div className="reader-header">
+        <div><p className="eyebrow">Virtual Book</p><h2>{record.book.title}</h2><p>{record.book.author}</p></div>
+        <button type="button" className="secondary" onClick={onClose}>Back to My Borrowed Books</button>
+      </div>
+      <div className="reader-toolbar">
+        <button type="button" className="secondary" disabled={page <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous Page</button>
+        <span>{isPdf ? 'Page ' + (page + 1) : 'Page ' + (Math.min(page + 1, pages.length || 1)) + ' of ' + (pages.length || 1)}</span>
+        <button type="button" className="secondary" disabled={!isPdf && page >= pages.length - 1} onClick={() => setPage((value) => value + 1)}>Next Page</button>
+        {isPdf && <>
+          <button type="button" className="secondary" aria-label="Zoom out" disabled={zoom <= .6} onClick={() => setZoom((value) => Math.max(.6, value - .1))}>−</button>
+          <span>{Math.round(zoom * 100)}%</span>
+          <button type="button" className="secondary" onClick={() => setZoom((value) => Math.min(2, value + .1))}>+</button>
+        </>}
+        {!isPdf && <>
+          <button type="button" className="secondary" aria-label="Zoom out" disabled={zoom <= .6} onClick={() => setZoom((value) => Math.max(.6, value - .1))}>−</button>
+          <span>{Math.round(zoom * 100)}%</span>
+          <button type="button" className="secondary" aria-label="Zoom in" disabled={zoom >= 2} onClick={() => setZoom((value) => Math.min(2, value + .1))}>+</button>
+        </>}
+      </div>
+      {isPdf
+        ? <iframe className="pdf-reader-frame" title={'Reading ' + record.book.title} src={pdfSource} />
+        : <article className="text-reader-page" style={{ fontSize: zoom + 'rem' }}>{text ? pages[page] : 'Loading virtual book…'}</article>}
+      <div className="reader-footer">
+        <button type="button" className="secondary" onClick={onClose}>Close Reader</button>
+        <a className="button-link" href={'/api/my-books/' + record.id + '/content/?download=1'}>Download Book</a>
       </div>
     </section>
   );
@@ -1365,23 +1490,38 @@ function BorrowedBooks({ api, showMessage }) {
 
 function BookManager({ api, showMessage }) {
   const [editing, setEditing] = useState(emptyBook);
+  const [virtualFile, setVirtualFile] = useState(null);
   const [booksKey, setBooksKey] = useState(0);
 
   async function saveBook(event) {
     event.preventDefault();
     try {
+      let saved;
       if (editing.id) {
-        await api.put(`/api/books/${editing.id}/`, editing);
-        showMessage('Book updated.');
+        saved = await api.put(`/api/books/${editing.id}/`, editing);
       } else {
-        await api.post('/api/books/', editing);
-        showMessage('Book added.');
+        saved = await api.post('/api/books/', editing);
       }
+      setEditing(saved.book);
+      if (virtualFile) {
+        await api.upload(`/api/admin/books/${saved.book.id}/virtual-file/?filename=${encodeURIComponent(virtualFile.name)}`, virtualFile);
+      }
+      showMessage(virtualFile ? 'Book saved with its virtual version.' : editing.id ? 'Book updated.' : 'Book added.');
       setEditing(emptyBook);
+      setVirtualFile(null);
       setBooksKey((key) => key + 1);
     } catch (error) {
       showMessage(error.message);
     }
+  }
+
+  async function removeVirtualVersion() {
+    try {
+      await api.delete(`/api/admin/books/${editing.id}/virtual-file/`);
+      setEditing({ ...editing, has_virtual_version: false, virtual_file_name: '' });
+      showMessage('Virtual book version removed.');
+      setBooksKey((key) => key + 1);
+    } catch (error) { showMessage(error.message); }
   }
 
   async function removeBook(book) {
@@ -1412,9 +1552,15 @@ function BookManager({ api, showMessage }) {
           Available copies
           <input type="number" min="0" value={editing.available_copies} onChange={(event) => setEditing({ ...editing, available_copies: event.target.value })} />
         </label>
+        <label>
+          Virtual book file (PDF or TXT)
+          <input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(event) => setVirtualFile(event.target.files?.[0] || null)} />
+        </label>
+        <p className="form-hint">PDF or plain text, up to 50 MB. The file is private and members can access it only while they have an active virtual loan.</p>
+        {editing.id && editing.has_virtual_version && <div className="virtual-file-current"><span>Virtual version: {editing.virtual_file_name}</span><button type="button" className="danger" onClick={removeVirtualVersion}>Remove virtual version</button></div>}
         <button className="primary" type="submit">Save book</button>
       </form>
-      <ManagedBookList key={booksKey} api={api} onEdit={setEditing} onDelete={removeBook} showMessage={showMessage} />
+      <ManagedBookList key={booksKey} api={api} onEdit={(book) => { setEditing(book); setVirtualFile(null); }} onDelete={removeBook} showMessage={showMessage} />
     </div>
   );
 }
@@ -1435,6 +1581,7 @@ function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
             <span>{book.title}</span>
             <span>{book.author}</span>
             <span>{book.available_copies}/{book.quantity}</span>
+            <span className={book.has_virtual_version ? 'format-badge virtual-badge' : 'format-badge physical-badge'}>{book.has_virtual_version ? 'Virtual + physical' : 'Physical only'}</span>
             <button type="button" onClick={() => onEdit(book)}>Edit</button>
             <button type="button" className="danger" onClick={() => onDelete(book)}>Delete</button>
           </div>
@@ -1444,7 +1591,17 @@ function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
   );
 }
 
-function RecordTable({ records }) {
+function RecordTable({ records, api, reload, showMessage }) {
+  async function confirmCollection(record) {
+    try {
+      await api.post('/api/admin/borrow-records/' + record.id + '/collection/');
+      await reload();
+      showMessage('Collection confirmed for ' + record.user.username + '.');
+    } catch (error) {
+      showMessage(error.message);
+    }
+  }
+
   return (
     <section className="panel">
       <h2>Borrowed Books</h2>
@@ -1453,8 +1610,12 @@ function RecordTable({ records }) {
           <div className="row" key={record.id}>
             <span>{record.user.username}</span>
             <span>{record.book.title}</span>
+            <span className={'format-badge ' + (record.book_format === 'virtual' ? 'virtual-badge' : 'physical-badge')}>{record.book_format === 'virtual' ? 'Virtual Book' : 'Physical Book'}</span>
             <span>{record.status}</span>
             <span>Due {record.due_date}</span>
+            {record.book_format !== 'virtual' && record.status !== 'returned' && (record.collection_confirmed
+              ? <span className="collection-confirmed">Collection confirmed</span>
+              : <button type="button" onClick={() => confirmCollection(record)}>Confirm Collection</button>)}
           </div>
         ))}
         {!records.length && <div className="empty-state">No borrowing records yet.</div>}

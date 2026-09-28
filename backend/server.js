@@ -1,6 +1,7 @@
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const fs = require('fs');
 const express = require('express');
 const session = require('express-session');
 const Database = require('better-sqlite3');
@@ -8,7 +9,10 @@ const bcrypt = require('bcryptjs');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const db = new Database(process.env.LIBRARY_DB_PATH || path.join(__dirname, 'library.db'));
+const databasePath = process.env.LIBRARY_DB_PATH || path.join(__dirname, 'library.db');
+const db = new Database(databasePath);
+const privateBooksDir = process.env.VIRTUAL_BOOKS_DIR || path.join(path.dirname(databasePath), 'private-books');
+fs.mkdirSync(privateBooksDir, { recursive: true });
 
 // Required for secure session cookies when the app runs behind a hosting proxy.
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
@@ -33,7 +37,10 @@ db.exec(`
     isbn TEXT NOT NULL UNIQUE,
     category TEXT NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity >= 0),
-    available_copies INTEGER NOT NULL DEFAULT 1 CHECK(available_copies >= 0)
+    available_copies INTEGER NOT NULL DEFAULT 1 CHECK(available_copies >= 0),
+    virtual_file_path TEXT NOT NULL DEFAULT '',
+    virtual_file_name TEXT NOT NULL DEFAULT '',
+    virtual_file_type TEXT NOT NULL DEFAULT ''
   );
   CREATE TABLE IF NOT EXISTS borrow_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +49,8 @@ db.exec(`
     borrow_date TEXT NOT NULL,
     due_date TEXT NOT NULL,
     return_date TEXT,
+    collected_at TEXT,
+    book_format TEXT NOT NULL DEFAULT 'physical' CHECK(book_format IN ('physical', 'virtual')),
     status TEXT NOT NULL CHECK(status IN ('borrowed', 'returned', 'overdue')) DEFAULT 'borrowed'
   );
   CREATE TABLE IF NOT EXISTS login_activities (
@@ -104,6 +113,13 @@ if (!userColumns.includes('email_verified')) {
   db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1');
 }
 db.exec('UPDATE users SET email_verified = 1 WHERE email_verified = 0');
+const bookColumns = db.prepare('PRAGMA table_info(books)').all().map((column) => column.name);
+if (!bookColumns.includes('virtual_file_path')) db.exec("ALTER TABLE books ADD COLUMN virtual_file_path TEXT NOT NULL DEFAULT ''");
+if (!bookColumns.includes('virtual_file_name')) db.exec("ALTER TABLE books ADD COLUMN virtual_file_name TEXT NOT NULL DEFAULT ''");
+if (!bookColumns.includes('virtual_file_type')) db.exec("ALTER TABLE books ADD COLUMN virtual_file_type TEXT NOT NULL DEFAULT ''");
+const borrowColumns = db.prepare('PRAGMA table_info(borrow_records)').all().map((column) => column.name);
+if (!borrowColumns.includes('book_format')) db.exec("ALTER TABLE borrow_records ADD COLUMN book_format TEXT NOT NULL DEFAULT 'physical'");
+if (!borrowColumns.includes('collected_at')) db.exec('ALTER TABLE borrow_records ADD COLUMN collected_at TEXT');
 const adminExists = db.prepare("SELECT 1 FROM users WHERE role = 'admin'").get();
 if (!adminExists) {
   const username = process.env.ADMIN_USERNAME || 'admin';
@@ -125,7 +141,17 @@ app.use(session({
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (date, days) => { const value = new Date(`${date}T00:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
 const userJson = (user) => user && ({ id: user.id, username: user.username, email: user.email, role: user.role, is_active: Boolean(user.is_active), email_verified: Boolean(user.email_verified), profile_photo: user.profile_photo || '', is_authenticated: true });
-const bookJson = (book) => ({ ...book, quantity: Math.max(book.quantity, book.available_copies), available_copies: Math.min(book.available_copies, Math.max(book.quantity, book.available_copies)) });
+const bookJson = (book) => {
+  if (!book) return book;
+  const { virtual_file_path, ...publicBook } = book;
+  const quantity = Math.max(book.quantity, book.available_copies);
+  return {
+    ...publicBook,
+    quantity,
+    available_copies: Math.min(book.available_copies, quantity),
+    has_virtual_version: Boolean(virtual_file_path),
+  };
+};
 const getUser = (id) => db.prepare('SELECT id, username, email, role, is_active, email_verified, profile_photo FROM users WHERE id = ?').get(id);
 const getBook = (id) => db.prepare('SELECT * FROM books WHERE id = ?').get(id);
 const getRecord = (id) => db.prepare('SELECT * FROM borrow_records WHERE id = ?').get(id);
@@ -141,7 +167,20 @@ const emailLooksValid = (email) => email.length <= 254
   && /^[^\s@<>]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(email);
 function recordJson(record) {
   const current = record;
-  return { id: current.id, user: userJson(getUser(current.user_id)), book: bookJson(getBook(current.book_id)), borrow_date: current.borrow_date, due_date: current.due_date, return_date: current.return_date, status: current.status };
+  return { id: current.id, user: userJson(getUser(current.user_id)), book: bookJson(getBook(current.book_id)), borrow_date: current.borrow_date, due_date: current.due_date, return_date: current.return_date, collected_at: current.collected_at || null, collection_confirmed: (current.book_format || 'physical') === 'physical' && Boolean(current.collected_at), book_format: current.book_format || 'physical', status: current.status };
+}
+function virtualFilePath(book) {
+  const key = String(book?.virtual_file_path || '');
+  if (!/^[a-f0-9-]{36}\.(pdf|txt)$/i.test(key)) return null;
+  return path.join(privateBooksDir, key);
+}
+function getActiveVirtualBorrow(recordId, userId) {
+  const record = db.prepare("SELECT * FROM borrow_records WHERE id = ? AND user_id = ? AND book_format = 'virtual' AND status IN ('borrowed', 'overdue')").get(recordId, userId);
+  if (!record) return null;
+  const book = getBook(record.book_id);
+  const filePath = virtualFilePath(book);
+  if (!book || !filePath || !fs.existsSync(filePath)) return null;
+  return { record, book, filePath };
 }
 function reservationJson(reservation) {
   return {
@@ -200,8 +239,10 @@ function processAutoReturns() {
     for (const record of records) {
       const autoReturnDate = addDays(record.borrow_date, 14);
       db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(autoReturnDate, record.id);
-      db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id);
-      promoteNextReservation(record.book_id);
+      if ((record.book_format || 'physical') === 'physical') {
+        db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id);
+        promoteNextReservation(record.book_id);
+      }
       affectedUsers.add(record.user_id);
     }
     for (const userId of affectedUsers) {
@@ -346,24 +387,63 @@ app.post('/api/notifications/read-all/', requireAuth, requireRole('user'), (req,
 app.get('/api/books/', requireAuth, (req, res) => { const q = String(req.query.q || '').trim(); const books = q ? db.prepare('SELECT * FROM books WHERE title LIKE ? OR author LIKE ? OR category LIKE ? OR isbn LIKE ? ORDER BY title').all(...Array(4).fill(`%${q}%`)) : db.prepare('SELECT * FROM books ORDER BY title').all(); res.json({ books: books.map(bookJson) }); });
 app.post('/api/books/', requireAuth, requireRole('admin'), (req, res) => { const data = req.body; const quantity = Math.max(Number(data.quantity || 1), Number(data.available_copies || data.quantity || 1)); const available = Math.max(0, Number(data.available_copies ?? quantity)); try { const result = db.prepare('INSERT INTO books (title, author, isbn, category, quantity, available_copies) VALUES (?, ?, ?, ?, ?, ?)').run(String(data.title || '').trim(), String(data.author || '').trim(), String(data.isbn || '').trim(), String(data.category || '').trim(), quantity, available); res.status(201).json({ book: bookJson(getBook(result.lastInsertRowid)) }); } catch (error) { uniqueError(res, error); } });
 app.put('/api/books/:id/', requireAuth, requireRole('admin'), (req, res) => { const book = getBook(req.params.id); if (!book) return res.status(404).json({ error: 'Book not found.' }); const data = req.body; const updated = { ...book, ...Object.fromEntries(['title', 'author', 'isbn', 'category'].filter((key) => key in data).map((key) => [key, String(data[key] || '').trim()])), ...Object.fromEntries(['quantity', 'available_copies'].filter((key) => key in data).map((key) => [key, Math.max(0, Number(data[key] || 0))])) }; updated.quantity = Math.max(updated.quantity, updated.available_copies); try { db.prepare('UPDATE books SET title=?, author=?, isbn=?, category=?, quantity=?, available_copies=? WHERE id=?').run(updated.title, updated.author, updated.isbn, updated.category, updated.quantity, updated.available_copies, book.id); res.json({ book: bookJson(getBook(book.id)) }); } catch (error) { uniqueError(res, error); } });
-app.delete('/api/books/:id/', requireAuth, requireRole('admin'), (req, res) => { if (!getBook(req.params.id)) return res.status(404).json({ error: 'Book not found.' }); db.prepare('DELETE FROM books WHERE id = ?').run(req.params.id); res.json({ ok: true }); });
+app.put('/api/admin/books/:id/virtual-file/', requireAuth, requireRole('admin'), express.raw({ type: ['application/pdf', 'text/plain'], limit: '50mb' }), (req, res) => {
+  const book = getBook(req.params.id);
+  if (!book) return res.status(404).json({ error: 'Book not found.' });
+  if (db.prepare("SELECT 1 FROM borrow_records WHERE book_id = ? AND book_format = 'virtual' AND status IN ('borrowed', 'overdue') LIMIT 1").get(book.id)) return res.status(409).json({ error: 'This virtual book is currently borrowed. Wait until the active loan is returned before replacing its file.' });
+  const mime = String(req.headers['content-type'] || '').split(';')[0].toLowerCase();
+  const originalName = path.basename(String(req.query.filename || 'virtual-book').replace(/[\\/]/g, '_')).slice(0, 180);
+  const extension = path.extname(originalName).toLowerCase();
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'Choose a PDF or plain text book file.' });
+  if (!((mime === 'application/pdf' && extension === '.pdf') || (mime === 'text/plain' && extension === '.txt'))) {
+    return res.status(400).json({ error: 'Only PDF and plain text (.txt) virtual books are supported.' });
+  }
+  if (mime === 'application/pdf' && req.body.subarray(0, 5).toString('ascii') !== '%PDF-') return res.status(400).json({ error: 'The uploaded file is not a valid PDF.' });
+  if (mime === 'text/plain' && req.body.includes(0)) return res.status(400).json({ error: 'The text book contains invalid binary data.' });
+  const storageKey = `${crypto.randomUUID()}${extension}`;
+  const storedPath = path.join(privateBooksDir, storageKey);
+  fs.writeFileSync(storedPath, req.body, { flag: 'wx', mode: 0o600 });
+  const previousPath = virtualFilePath(book);
+  db.prepare('UPDATE books SET virtual_file_path = ?, virtual_file_name = ?, virtual_file_type = ? WHERE id = ?')
+    .run(storageKey, originalName, mime, book.id);
+  if (previousPath && fs.existsSync(previousPath)) fs.unlinkSync(previousPath);
+  res.json({ book: bookJson(getBook(book.id)) });
+});
+app.delete('/api/admin/books/:id/virtual-file/', requireAuth, requireRole('admin'), (req, res) => {
+  const book = getBook(req.params.id);
+  if (!book) return res.status(404).json({ error: 'Book not found.' });
+  if (db.prepare("SELECT 1 FROM borrow_records WHERE book_id = ? AND book_format = 'virtual' AND status IN ('borrowed', 'overdue') LIMIT 1").get(book.id)) return res.status(409).json({ error: 'This virtual book is currently borrowed. Wait until the active loan is returned before removing its file.' });
+  const storedPath = virtualFilePath(book);
+  db.prepare("UPDATE books SET virtual_file_path = '', virtual_file_name = '', virtual_file_type = '' WHERE id = ?").run(book.id);
+  if (storedPath && fs.existsSync(storedPath)) fs.unlinkSync(storedPath);
+  res.json({ book: bookJson(getBook(book.id)) });
+});
+app.delete('/api/books/:id/', requireAuth, requireRole('admin'), (req, res) => { const book = getBook(req.params.id); if (!book) return res.status(404).json({ error: 'Book not found.' }); const storedPath = virtualFilePath(book); db.prepare('DELETE FROM books WHERE id = ?').run(book.id); if (storedPath && fs.existsSync(storedPath)) fs.unlinkSync(storedPath); res.json({ ok: true }); });
 
 app.post('/api/books/:id/borrow/', requireAuth, requireRole('user'), (req, res) => {
   const book = getBook(req.params.id);
   if (!book) return res.status(404).json({ error: 'Book not found.' });
+  const format = String(req.body?.format || 'physical');
+  if (!['physical', 'virtual'].includes(format)) return res.status(400).json({ error: 'Choose a physical or virtual book format.' });
   if (db.prepare("SELECT 1 FROM borrow_records WHERE user_id = ? AND book_id = ? AND status IN ('borrowed', 'overdue')").get(req.user.id, book.id)) {
     return res.status(400).json({ error: 'You already borrowed this book.' });
   }
-  if (book.available_copies <= 0) return res.status(400).json({ error: 'This book is not available right now.' });
-  const priority = db.prepare("SELECT * FROM reservations WHERE book_id = ? AND status = 'ready' ORDER BY ready_at, id LIMIT 1").get(book.id);
+  if (format === 'virtual' && !virtualFilePath(book)) return res.status(400).json({ error: 'This book has no virtual version available.' });
+  if (format === 'physical' && book.available_copies <= 0) return res.status(400).json({ error: 'This physical copy is not available right now. Reserve it to join the collection queue.' });
+  const priority = format === 'physical'
+    ? db.prepare("SELECT * FROM reservations WHERE book_id = ? AND status = 'ready' ORDER BY ready_at, id LIMIT 1").get(book.id)
+    : null;
   if (priority && priority.user_id !== req.user.id) return res.status(400).json({ error: 'This copy is reserved for the next person in the queue.' });
   const borrowDate = today();
   const result = db.transaction(() => {
     const activeBorrowCount = db.prepare("SELECT COUNT(*) AS count FROM borrow_records WHERE user_id = ? AND status IN ('borrowed', 'overdue')").get(req.user.id).count;
     if (activeBorrowCount >= 3) return { limitReached: true };
-    const created = db.prepare("INSERT INTO borrow_records (user_id, book_id, borrow_date, due_date, status) VALUES (?, ?, ?, ?, 'borrowed')").run(req.user.id, book.id, borrowDate, addDays(borrowDate, 7));
-    db.prepare('UPDATE books SET available_copies = available_copies - 1 WHERE id = ?').run(book.id);
-    if (priority) db.prepare("UPDATE reservations SET status = 'fulfilled', fulfilled_at = ? WHERE id = ?").run(new Date().toISOString(), priority.id);
+    const created = db.prepare("INSERT INTO borrow_records (user_id, book_id, borrow_date, due_date, book_format, status) VALUES (?, ?, ?, ?, ?, 'borrowed')")
+      .run(req.user.id, book.id, borrowDate, addDays(borrowDate, 7), format);
+    if (format === 'physical') {
+      db.prepare('UPDATE books SET available_copies = available_copies - 1 WHERE id = ?').run(book.id);
+      if (priority) db.prepare("UPDATE reservations SET status = 'fulfilled', fulfilled_at = ? WHERE id = ?").run(new Date().toISOString(), priority.id);
+    }
     return created;
   }).immediate();
   if (result.limitReached) return res.status(400).json({ error: 'You can borrow up to 3 books at a time. Return a book before borrowing another.' });
@@ -390,7 +470,30 @@ app.post('/api/my-reservations/:id/cancel/', requireAuth, requireRole('user'), (
   res.json({ ok: true });
 });
 app.get('/api/my-books/', requireAuth, requireRole('user'), (req, res) => { syncBorrowNotifications(req.user.id); const records = db.prepare('SELECT * FROM borrow_records WHERE user_id = ? ORDER BY borrow_date DESC, id DESC').all(req.user.id); res.json({ records: records.map(recordJson) }); });
-app.post('/api/my-books/:id/return/', requireAuth, requireRole('user'), (req, res) => { const record = getRecord(req.params.id); if (!record || record.user_id !== req.user.id) return res.status(404).json({ error: 'Borrow record not found.' }); if (record.status === 'returned') return res.status(400).json({ error: 'This book has already been returned.' }); const result = db.transaction(() => { db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(today(), record.id); db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id); const reservation = promoteNextReservation(record.book_id); return { record: getRecord(record.id), reservation }; })(); res.json({ record: recordJson(result.record), reservation: result.reservation ? reservationJson(result.reservation) : null }); });
+app.post('/api/admin/borrow-records/:id/collection/', requireAuth, requireRole('admin'), (req, res) => {
+  const record = getRecord(req.params.id);
+  if (!record) return res.status(404).json({ error: 'Borrow record not found.' });
+  if ((record.book_format || 'physical') !== 'physical') return res.status(400).json({ error: 'Only physical book collection can be confirmed.' });
+  if (record.status === 'returned') return res.status(400).json({ error: 'This physical book has already been returned.' });
+  if (!record.collected_at) db.prepare('UPDATE borrow_records SET collected_at = ? WHERE id = ?').run(new Date().toISOString(), record.id);
+  res.json({ record: recordJson(getRecord(record.id)) });
+});
+app.get('/api/my-books/:id/read/', requireAuth, requireRole('user'), (req, res) => {
+  const access = getActiveVirtualBorrow(req.params.id, req.user.id);
+  if (!access) return res.status(404).json({ error: 'An active virtual borrowing record is required to read this book.' });
+  if (access.book.virtual_file_type !== 'text/plain') return res.status(415).json({ error: 'This virtual book is not a plain text document.' });
+  res.json({ title: access.book.title, text: fs.readFileSync(access.filePath, 'utf8') });
+});
+app.get('/api/my-books/:id/content/', requireAuth, requireRole('user'), (req, res) => {
+  const access = getActiveVirtualBorrow(req.params.id, req.user.id);
+  if (!access) return res.status(404).json({ error: 'An active virtual borrowing record is required to access this book.' });
+  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  const safeName = access.book.virtual_file_name.replace(/[\r\n"]/g, '_');
+  res.setHeader('Content-Type', access.book.virtual_file_type);
+  res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+  res.sendFile(access.filePath);
+});
+app.post('/api/my-books/:id/return/', requireAuth, requireRole('user'), (req, res) => { const record = getRecord(req.params.id); if (!record || record.user_id !== req.user.id) return res.status(404).json({ error: 'Borrow record not found.' }); if (record.status === 'returned') return res.status(400).json({ error: 'This book has already been returned.' }); if ((record.book_format || 'physical') === 'physical' && !record.collected_at) return res.status(403).json({ error: 'An administrator must confirm that you collected this physical book before you can return it.' }); const result = db.transaction(() => { db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(today(), record.id); if ((record.book_format || 'physical') === 'physical') db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id); const reservation = (record.book_format || 'physical') === 'physical' ? promoteNextReservation(record.book_id) : null; return { record: getRecord(record.id), reservation }; })(); res.json({ record: recordJson(result.record), reservation: result.reservation ? reservationJson(result.reservation) : null }); });
 app.get('/api/admin/summary/', requireAuth, requireRole('admin'), (req, res) => {
   const records = db.prepare('SELECT * FROM borrow_records ORDER BY borrow_date DESC, id DESC').all();
   const reservations = db.prepare("SELECT * FROM reservations WHERE status IN ('waiting', 'ready') ORDER BY created_at, id").all();
