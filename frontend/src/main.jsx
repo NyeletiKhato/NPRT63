@@ -595,12 +595,12 @@ function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, on
     return <NotificationCenter api={api} showMessage={showMessage} />;
   }
   if (view === 'recommendations') {
-    return <Recommendations api={api} showMessage={showMessage} />;
+    return <Recommendations api={api} setView={setView} showMessage={showMessage} />;
   }
   if (view === 'account') {
     return <AccountSettings api={api} user={user} onUserChange={onUserChange} onDeactivated={onDeactivated} showMessage={showMessage} />;
   }
-  return <BookBrowser api={api} canBorrow showMessage={showMessage} />;
+  return <BookBrowser api={api} canBorrow setView={setView} showMessage={showMessage} />;
 }
 
 function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage }) {
@@ -817,7 +817,7 @@ function Stat({ label, value }) {
   );
 }
 
-function Recommendations({ api, showMessage }) {
+function Recommendations({ api, setView, showMessage }) {
   const [books, setBooks] = useState([]);
   const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
   const [input, setInput] = useState('');
@@ -1130,6 +1130,7 @@ function Recommendations({ api, showMessage }) {
           setBorrowChoiceBook(null);
           const data = await api.get('/api/books/');
           setBooks(data.books.filter((item) => item.available_copies > 0 || item.has_virtual_version));
+          setView('my-books');
         }}
         onReserve={async () => {
           try {
@@ -1146,7 +1147,7 @@ function Recommendations({ api, showMessage }) {
   );
 }
 
-function BookBrowser({ api, canBorrow, showMessage }) {
+function BookBrowser({ api, canBorrow, setView, showMessage }) {
   const [books, setBooks] = useState([]);
   const [query, setQuery] = useState('');
   const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
@@ -1212,7 +1213,7 @@ function BookBrowser({ api, canBorrow, showMessage }) {
         api={api}
         book={borrowChoiceBook}
         onClose={() => setBorrowChoiceBook(null)}
-        onBorrowed={async () => { setBorrowChoiceBook(null); await loadBooks(); }}
+        onBorrowed={async () => { setBorrowChoiceBook(null); await loadBooks(); setView('my-books'); }}
         onReserve={() => { setBorrowChoiceBook(null); reserve(borrowChoiceBook); }}
         showMessage={showMessage}
       />}
@@ -1231,7 +1232,7 @@ function BorrowFormatDialog({ api, book, onClose, onBorrowed, onReserve, showMes
       await api.post(`/api/books/${book.id}/borrow/`, { format });
       showMessage(format === 'physical'
         ? 'Your physical book has been reserved for collection. Please collect it from the library.'
-        : 'Virtual Book borrowed. Open My Borrowed Books to read or download it.');
+        : 'Virtual book borrowed.');
       await onBorrowed();
     } catch (error) {
       showMessage(error.message);
