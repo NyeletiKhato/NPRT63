@@ -1392,8 +1392,22 @@ function BorrowedBooks({ api, showMessage }) {
   }
 
   useEffect(() => {
-    loadRecords().catch((error) => showMessage(error.message));
-  }, []);
+    let active = true;
+    const refreshRecords = () => loadRecords().catch((error) => {
+      if (active) showMessage(error.message);
+    });
+    const refreshOnFocus = () => {
+      if (document.visibilityState === 'visible') refreshRecords();
+    };
+    refreshRecords();
+    const timer = window.setInterval(refreshRecords, 4000);
+    window.addEventListener('focus', refreshOnFocus);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshOnFocus);
+    };
+  }, [api, showMessage]);
 
   async function returnBook(record) {
     try {
@@ -1422,7 +1436,7 @@ function BorrowedBooks({ api, showMessage }) {
           return <div className="row borrowed-book-row" key={record.id}>
             <span><strong>{record.book.title}</strong><small>{record.book.author}</small></span>
             <span className={'format-badge ' + (isVirtual ? 'virtual-badge' : 'physical-badge')}>{isVirtual ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{record.return_confirmation_pending ? 'Return Pending Confirmation' : record.status}</span>
+            <span>{record.return_confirmation_pending ? 'Return Pending Confirmation' : record.status === 'returned' ? 'Returned' : record.status}</span>
             <span>Due {record.due_date}</span>
             {isVirtual && isActive && <div className="borrowed-book-actions">
               <button type="button" onClick={() => setReaderRecord(record)}>Read Book</button>
