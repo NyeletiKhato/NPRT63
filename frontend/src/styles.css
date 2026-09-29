@@ -1286,6 +1286,13 @@ select {
 .dialog-cancel { margin-top: 16px; }
 .collection-required { background: #fff5e5; border-radius: 8px; color: #854d0e; font-size: .83rem; font-weight: 700; padding: 9px 12px; }
 .collection-confirmed { background: #e5f5ef; border-radius: 8px; color: #116149; font-size: .83rem; font-weight: 700; padding: 9px 12px; }
+.collection-pending { background: #eaf0ff; border-radius: 8px; color: #334a8a; font-size: .83rem; font-weight: 700; padding: 9px 12px; }
+.admin-record-table { overflow-x: auto; }
+.admin-record-header,
+.admin-borrow-record-row { grid-template-columns: minmax(110px, 1fr) minmax(140px, 1.25fr) 125px minmax(145px, 1.15fr) 115px 145px minmax(185px, 1.3fr); min-width: 1120px; }
+.admin-record-header { background: #f1f5f4; color: #30413f; }
+.admin-record-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.admin-record-actions .collection-confirmed { white-space: nowrap; }
 .borrowed-book-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .button-link { align-items: center; border-radius: 6px; display: inline-flex; font-weight: 700; justify-content: center; min-height: 40px; padding: 0 14px; text-decoration: none; }
 .borrowed-book-row { align-items: center; }

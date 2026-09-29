@@ -1398,7 +1398,9 @@ function BorrowedBooks({ api, showMessage }) {
   async function returnBook(record) {
     try {
       await api.post('/api/my-books/' + record.id + '/return/');
-      showMessage('Book returned.');
+      showMessage(record.book_format === 'physical'
+        ? 'Return submitted. The library administrator must confirm receipt.'
+        : 'Book returned.');
       await loadRecords();
     } catch (error) {
       showMessage(error.message);
@@ -1420,19 +1422,21 @@ function BorrowedBooks({ api, showMessage }) {
           return <div className="row borrowed-book-row" key={record.id}>
             <span><strong>{record.book.title}</strong><small>{record.book.author}</small></span>
             <span className={'format-badge ' + (isVirtual ? 'virtual-badge' : 'physical-badge')}>{isVirtual ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{record.status}</span>
+            <span>{record.return_confirmation_pending ? 'Return Pending Confirmation' : record.status}</span>
             <span>Due {record.due_date}</span>
             {isVirtual && isActive && <div className="borrowed-book-actions">
               <button type="button" onClick={() => setReaderRecord(record)}>Read Book</button>
               <a className="button-link secondary" href={'/api/my-books/' + record.id + '/content/?download=1'}>Download Book</a>
             </div>}
-            {!isVirtual && isActive && <span className={record.collection_confirmed ? 'collection-confirmed' : 'collection-required'}>
-              {record.collection_confirmed
-                ? 'Collection confirmed by the library. You can now return this book.'
-                : 'Collection Required: collect this book from the library. An administrator must confirm collection before you can return it.'}
+            {!isVirtual && isActive && <span className={record.return_confirmation_pending ? 'collection-pending' : record.collection_confirmed ? 'collection-confirmed' : 'collection-required'}>
+              {record.return_confirmation_pending
+                ? 'Return received by the library; awaiting administrator confirmation.'
+                : record.collection_confirmed
+                  ? 'Collection confirmed by the library.'
+                  : 'Collection Required: collect this book from the library. An administrator must confirm collection before return.'}
             </span>}
             {isVirtual && isActive && <button type="button" className="secondary" onClick={() => returnBook(record)}>Return Book</button>}
-            {!isVirtual && isActive && record.collection_confirmed && <button type="button" className="secondary" onClick={() => returnBook(record)}>Return Book</button>}
+            {!isVirtual && isActive && record.collection_confirmed && !record.return_confirmation_pending && <button type="button" className="secondary" onClick={() => returnBook(record)}>Submit Return</button>}
           </div>;
         })}
         {!records.length && <div className="empty-state">You have no borrowed books.</div>}
@@ -1602,20 +1606,38 @@ function RecordTable({ records, api, reload, showMessage }) {
     }
   }
 
+  async function confirmReturn(record) {
+    try {
+      await api.post('/api/admin/borrow-records/' + record.id + '/return/');
+      await reload();
+      showMessage('Return confirmed for ' + record.user.username + '.');
+    } catch (error) {
+      showMessage(error.message);
+    }
+  }
+
   return (
     <section className="panel">
       <h2>Borrowed Books</h2>
-      <div className="table">
+      <div className="table admin-record-table">
+        <div className="row admin-record-header" aria-hidden="true">
+          <strong>Member</strong><strong>Book</strong><strong>Format</strong><strong>Loan Status</strong><strong>Due Date</strong><strong>Collection</strong><strong>Admin Action</strong>
+        </div>
         {records.map((record) => (
-          <div className="row" key={record.id}>
+          <div className="row admin-borrow-record-row" key={record.id}>
             <span>{record.user.username}</span>
             <span>{record.book.title}</span>
             <span className={'format-badge ' + (record.book_format === 'virtual' ? 'virtual-badge' : 'physical-badge')}>{record.book_format === 'virtual' ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{record.status}</span>
+            <span>{record.return_confirmation_pending ? 'Return Pending Confirmation' : record.status}</span>
             <span>Due {record.due_date}</span>
-            {record.book_format !== 'virtual' && record.status !== 'returned' && (record.collection_confirmed
-              ? <span className="collection-confirmed">Collection confirmed</span>
-              : <button type="button" onClick={() => confirmCollection(record)}>Confirm Collection</button>)}
+            <span>{record.book_format === 'virtual' ? 'Not required' : record.collection_confirmed ? 'Collected' : 'Awaiting collection'}</span>
+            <div className="admin-record-actions">
+              {record.book_format !== 'virtual' && record.status !== 'returned' && !record.collection_confirmed && <button type="button" onClick={() => confirmCollection(record)}>Confirm Collection</button>}
+              {record.book_format !== 'virtual' && record.status !== 'returned' && record.return_confirmation_pending && <button type="button" onClick={() => confirmReturn(record)}>Confirm Return</button>}
+              {record.book_format !== 'virtual' && record.status !== 'returned' && !record.return_confirmation_pending && record.collection_confirmed && <span className="collection-confirmed">Waiting for member return</span>}
+              {record.status === 'returned' && <span className="collection-confirmed">Complete</span>}
+              {record.book_format === 'virtual' && record.status !== 'returned' && <span>Member managed</span>}
+            </div>
           </div>
         ))}
         {!records.length && <div className="empty-state">No borrowing records yet.</div>}

@@ -50,6 +50,7 @@ db.exec(`
     due_date TEXT NOT NULL,
     return_date TEXT,
     collected_at TEXT,
+    return_requested_at TEXT,
     book_format TEXT NOT NULL DEFAULT 'physical' CHECK(book_format IN ('physical', 'virtual')),
     status TEXT NOT NULL CHECK(status IN ('borrowed', 'returned', 'overdue')) DEFAULT 'borrowed'
   );
@@ -120,6 +121,7 @@ if (!bookColumns.includes('virtual_file_type')) db.exec("ALTER TABLE books ADD C
 const borrowColumns = db.prepare('PRAGMA table_info(borrow_records)').all().map((column) => column.name);
 if (!borrowColumns.includes('book_format')) db.exec("ALTER TABLE borrow_records ADD COLUMN book_format TEXT NOT NULL DEFAULT 'physical'");
 if (!borrowColumns.includes('collected_at')) db.exec('ALTER TABLE borrow_records ADD COLUMN collected_at TEXT');
+if (!borrowColumns.includes('return_requested_at')) db.exec('ALTER TABLE borrow_records ADD COLUMN return_requested_at TEXT');
 const adminExists = db.prepare("SELECT 1 FROM users WHERE role = 'admin'").get();
 if (!adminExists) {
   const username = process.env.ADMIN_USERNAME || 'admin';
@@ -167,7 +169,7 @@ const emailLooksValid = (email) => email.length <= 254
   && /^[^\s@<>]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(email);
 function recordJson(record) {
   const current = record;
-  return { id: current.id, user: userJson(getUser(current.user_id)), book: bookJson(getBook(current.book_id)), borrow_date: current.borrow_date, due_date: current.due_date, return_date: current.return_date, collected_at: current.collected_at || null, collection_confirmed: (current.book_format || 'physical') === 'physical' && Boolean(current.collected_at), book_format: current.book_format || 'physical', status: current.status };
+  return { id: current.id, user: userJson(getUser(current.user_id)), book: bookJson(getBook(current.book_id)), borrow_date: current.borrow_date, due_date: current.due_date, return_date: current.return_date, collected_at: current.collected_at || null, collection_confirmed: (current.book_format || 'physical') === 'physical' && Boolean(current.collected_at), return_requested_at: current.return_requested_at || null, return_confirmation_pending: (current.book_format || 'physical') === 'physical' && Boolean(current.return_requested_at) && current.status !== 'returned', book_format: current.book_format || 'physical', status: current.status };
 }
 function virtualFilePath(book) {
   const key = String(book?.virtual_file_path || '');
@@ -234,7 +236,7 @@ function syncBorrowNotifications(userId) {
 function processAutoReturns() {
   const cutoffDate = addDays(today(), -14);
   return db.transaction(() => {
-    const records = db.prepare("SELECT * FROM borrow_records WHERE status IN ('borrowed', 'overdue') AND borrow_date <= ? ORDER BY user_id, borrow_date, id").all(cutoffDate);
+    const records = db.prepare("SELECT * FROM borrow_records WHERE status IN ('borrowed', 'overdue') AND borrow_date <= ? AND NOT (book_format = 'physical' AND return_requested_at IS NOT NULL) ORDER BY user_id, borrow_date, id").all(cutoffDate);
     const affectedUsers = new Set();
     for (const record of records) {
       const autoReturnDate = addDays(record.borrow_date, 14);
@@ -478,6 +480,21 @@ app.post('/api/admin/borrow-records/:id/collection/', requireAuth, requireRole('
   if (!record.collected_at) db.prepare('UPDATE borrow_records SET collected_at = ? WHERE id = ?').run(new Date().toISOString(), record.id);
   res.json({ record: recordJson(getRecord(record.id)) });
 });
+app.post('/api/admin/borrow-records/:id/return/', requireAuth, requireRole('admin'), (req, res) => {
+  const record = getRecord(req.params.id);
+  if (!record) return res.status(404).json({ error: 'Borrow record not found.' });
+  if ((record.book_format || 'physical') !== 'physical') return res.status(400).json({ error: 'Admin return confirmation applies only to physical books.' });
+  if (record.status === 'returned') return res.status(400).json({ error: 'This physical book has already been returned.' });
+  if (!record.collected_at) return res.status(400).json({ error: 'Confirm collection before confirming this return.' });
+  if (!record.return_requested_at) return res.status(400).json({ error: 'The member has not submitted this book for return.' });
+  const result = db.transaction(() => {
+    db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(today(), record.id);
+    db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id);
+    const reservation = promoteNextReservation(record.book_id);
+    return { record: getRecord(record.id), reservation };
+  }).immediate();
+  res.json({ record: recordJson(result.record), reservation: result.reservation ? reservationJson(result.reservation) : null });
+});
 app.get('/api/my-books/:id/read/', requireAuth, requireRole('user'), (req, res) => {
   const access = getActiveVirtualBorrow(req.params.id, req.user.id);
   if (!access) return res.status(404).json({ error: 'An active virtual borrowing record is required to read this book.' });
@@ -493,7 +510,19 @@ app.get('/api/my-books/:id/content/', requireAuth, requireRole('user'), (req, re
   res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(safeName)}`);
   res.sendFile(access.filePath);
 });
-app.post('/api/my-books/:id/return/', requireAuth, requireRole('user'), (req, res) => { const record = getRecord(req.params.id); if (!record || record.user_id !== req.user.id) return res.status(404).json({ error: 'Borrow record not found.' }); if (record.status === 'returned') return res.status(400).json({ error: 'This book has already been returned.' }); if ((record.book_format || 'physical') === 'physical' && !record.collected_at) return res.status(403).json({ error: 'An administrator must confirm that you collected this physical book before you can return it.' }); const result = db.transaction(() => { db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(today(), record.id); if ((record.book_format || 'physical') === 'physical') db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id); const reservation = (record.book_format || 'physical') === 'physical' ? promoteNextReservation(record.book_id) : null; return { record: getRecord(record.id), reservation }; })(); res.json({ record: recordJson(result.record), reservation: result.reservation ? reservationJson(result.reservation) : null }); });
+app.post('/api/my-books/:id/return/', requireAuth, requireRole('user'), (req, res) => {
+  const record = getRecord(req.params.id);
+  if (!record || record.user_id !== req.user.id) return res.status(404).json({ error: 'Borrow record not found.' });
+  if (record.status === 'returned') return res.status(400).json({ error: 'This book has already been returned.' });
+  if ((record.book_format || 'physical') === 'physical') {
+    if (!record.collected_at) return res.status(403).json({ error: 'An administrator must confirm that you collected this physical book before you can return it.' });
+    if (record.return_requested_at) return res.status(400).json({ error: 'Your return is awaiting administrator confirmation.' });
+    db.prepare('UPDATE borrow_records SET return_requested_at = ? WHERE id = ?').run(new Date().toISOString(), record.id);
+    return res.json({ record: recordJson(getRecord(record.id)), message: 'Return submitted. An administrator must confirm receipt of the physical book.' });
+  }
+  db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(today(), record.id);
+  res.json({ record: recordJson(getRecord(record.id)), reservation: null });
+});
 app.get('/api/admin/summary/', requireAuth, requireRole('admin'), (req, res) => {
   const records = db.prepare('SELECT * FROM borrow_records ORDER BY borrow_date DESC, id DESC').all();
   const reservations = db.prepare("SELECT * FROM reservations WHERE status IN ('waiting', 'ready') ORDER BY created_at, id").all();
