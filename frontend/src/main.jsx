@@ -1200,10 +1200,7 @@ function BookBrowser({ api, canBorrow, setView, showMessage }) {
             </div>
             <div className="book-actions">
               <strong>{book.available_copies}/{book.quantity} available</strong>
-              {canBorrow && (book.available_copies > 0 || book.has_virtual_version
-                ? <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>
-                : <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>)}
-              {canBorrow && book.available_copies <= 0 && book.has_virtual_version && <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>}
+              {canBorrow && <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>}
             </div>
           </article>
         ))}
