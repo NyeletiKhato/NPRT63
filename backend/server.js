@@ -234,18 +234,19 @@ function syncBorrowNotifications(userId) {
   }
 }
 function processAutoReturns() {
-  const cutoffDate = addDays(today(), -14);
+  const physicalCutoffDate = addDays(today(), -14);
   return db.transaction(() => {
-    const records = db.prepare("SELECT * FROM borrow_records WHERE status IN ('borrowed', 'overdue') AND borrow_date <= ? AND NOT (book_format = 'physical' AND return_requested_at IS NOT NULL) ORDER BY user_id, borrow_date, id").all(cutoffDate);
+    const records = db.prepare("SELECT * FROM borrow_records WHERE status IN ('borrowed', 'overdue') AND ((book_format = 'virtual' AND due_date <= ?) OR (book_format = 'physical' AND borrow_date <= ? AND return_requested_at IS NULL)) ORDER BY user_id, borrow_date, id").all(today(), physicalCutoffDate);
     const affectedUsers = new Set();
     for (const record of records) {
-      const autoReturnDate = addDays(record.borrow_date, 14);
+      const isVirtual = record.book_format === 'virtual';
+      const autoReturnDate = isVirtual ? record.due_date : addDays(record.borrow_date, 14);
       db.prepare("UPDATE borrow_records SET return_date = ?, status = 'returned' WHERE id = ?").run(autoReturnDate, record.id);
-      if ((record.book_format || 'physical') === 'physical') {
+      if (!isVirtual) {
         db.prepare('UPDATE books SET available_copies = MIN(available_copies + 1, quantity) WHERE id = ?').run(record.book_id);
         promoteNextReservation(record.book_id);
+        affectedUsers.add(record.user_id);
       }
-      affectedUsers.add(record.user_id);
     }
     for (const userId of affectedUsers) {
       db.prepare("UPDATE users SET is_active = 0 WHERE id = ? AND role = 'user'").run(userId);

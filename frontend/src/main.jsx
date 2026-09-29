@@ -1428,7 +1428,7 @@ function BorrowedBooks({ api, showMessage }) {
   return (
     <section className="panel">
       <h2>My Borrowed Books</h2>
-      <p className="loan-policy-note">Please return physical books by their due date. Books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
+      <p className="loan-policy-note">Virtual books return automatically after 7 days. Physical books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
       <div className="table">
         {records.map((record) => {
           const isVirtual = record.book_format === 'virtual';
