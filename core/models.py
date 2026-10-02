@@ -11,6 +11,7 @@ class CustomUser(AbstractUser):
         ('user', 'Member'),
     ]
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='user')
+    is_suspended = models.BooleanField(default=False)
 
     class Meta:
         verbose_name = 'Member'
@@ -44,6 +45,8 @@ class BorrowRecord(models.Model):
     due_date = models.DateField(blank=True, null=True)
     return_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='borrowed')
+    fine_amount = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    fine_paid = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         if not self.due_date:

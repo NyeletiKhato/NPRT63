@@ -1,5 +1,6 @@
 import csv
 import json
+from datetime import timedelta
 
 from django.conf import settings
 from django.shortcuts import render, redirect, get_object_or_404
@@ -14,6 +15,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .models import CustomUser, Book, BorrowRecord, LoginActivity
 from .forms import RegisterForm, BookForm
 from django.utils import timezone
+from decimal import Decimal
 
 
 def _record_login(user):
@@ -74,6 +76,7 @@ def _user_json(user):
         'email': user.email,
         'role': user.role,
         'is_authenticated': user.is_authenticated,
+        'is_suspended': user.is_suspended,
     }
 
 
@@ -86,6 +89,8 @@ def _borrow_record_json(record):
         'due_date': record.due_date.isoformat() if record.due_date else None,
         'return_date': record.return_date.isoformat() if record.return_date else None,
         'status': record.status,
+        'fine_amount': str(record.fine_amount),
+        'fine_paid': record.fine_paid,
     }
 
 
@@ -111,6 +116,22 @@ def _require_role(request, role):
         label = 'Member' if role == 'user' else role.title()
         return JsonResponse({'error': f'{label} access required.'}, status=403)
     return None
+
+
+def _refresh_overdue_fines(user):
+    """Apply the flat physical-book fine and suspend members after 14 days unpaid."""
+    today = timezone.now().date()
+    overdue = BorrowRecord.objects.filter(user=user, due_date__lt=today, fine_amount=0)
+    overdue.update(fine_amount=Decimal('10.00'))
+    BorrowRecord.objects.filter(user=user, status='borrowed', due_date__lt=today).update(status='overdue')
+    suspension_due = BorrowRecord.objects.filter(
+        user=user, fine_amount__gt=0, fine_paid=False,
+        due_date__lte=today - timedelta(days=14),
+    ).exists()
+    if user.is_suspended != suspension_due:
+        user.is_suspended = suspension_due
+        user.save(update_fields=['is_suspended'])
+    return suspension_due
 
 
 def home(request):
@@ -145,6 +166,10 @@ def api_login(request):
         return JsonResponse({'error': 'You are not an admin.'}, status=403)
     if role == 'user' and user.role != 'user':
         return JsonResponse({'error': 'You are not a library member.'}, status=403)
+
+    _refresh_overdue_fines(user)
+    if user.role == 'user' and user.is_suspended:
+        return JsonResponse({'error': 'Your account is suspended. Please pay your outstanding overdue fine at the library.'}, status=403)
 
     login(request, user)
     _record_login(user)
@@ -244,6 +269,10 @@ def api_borrow_book(request, book_id):
     if role_error:
         return role_error
 
+    _refresh_overdue_fines(request.user)
+    if request.user.is_suspended:
+        return JsonResponse({'error': 'Your account is suspended. Please pay your outstanding overdue fine at the library.'}, status=403)
+
     book = _normalize_book_inventory(get_object_or_404(Book, id=book_id))
     already_borrowed = BorrowRecord.objects.filter(
         user=request.user,
@@ -266,6 +295,8 @@ def api_my_books(request):
     role_error = _require_role(request, 'user')
     if role_error:
         return role_error
+
+    _refresh_overdue_fines(request.user)
 
     borrowed_books = BorrowRecord.objects.filter(
         user=request.user
@@ -302,6 +333,8 @@ def api_admin_summary(request):
         return role_error
 
     report = _report_data()
+    for member in CustomUser.objects.filter(role='user'):
+        _refresh_overdue_fines(member)
     records = report['records']
     return JsonResponse({
         'stats': {
@@ -316,6 +349,20 @@ def api_admin_summary(request):
         'records': [_borrow_record_json(record) for record in records],
         'login_activities': [_login_activity_json(activity) for activity in report['login_activities']],
     })
+
+
+@require_POST
+def api_admin_pay_fine(request, record_id):
+    role_error = _require_role(request, 'admin')
+    if role_error:
+        return role_error
+    record = get_object_or_404(BorrowRecord.objects.select_related('user'), id=record_id)
+    if record.fine_amount <= 0:
+        return JsonResponse({'error': 'This borrowing record has no fine to pay.'}, status=400)
+    record.fine_paid = True
+    record.save(update_fields=['fine_paid'])
+    _refresh_overdue_fines(record.user)
+    return JsonResponse({'record': _borrow_record_json(record), 'member_suspended': record.user.is_suspended})
 
 def user_entry(request):
     return render(request, 'core/user_entry.html')
@@ -348,6 +395,12 @@ def custom_login_view(request):
             if role == 'user' and user.role != 'user':
                 messages.error(request, "You are not a library member.")
                 return redirect('/login/?role=user')
+
+            if user.role == 'user':
+                _refresh_overdue_fines(user)
+                if user.is_suspended:
+                    messages.error(request, 'Your account is suspended. Please pay your outstanding overdue fine at the library.')
+                    return redirect('/login/?role=user')
 
             login(request, user)
             _record_login(user)
@@ -411,6 +464,11 @@ def borrow_book(request, book_id):
     if request.user.role != 'user':
         messages.error(request, "Only library members can borrow books.")
         return redirect('redirect_dashboard')
+
+    _refresh_overdue_fines(request.user)
+    if request.user.is_suspended:
+        messages.error(request, 'Your account is suspended. Please pay your outstanding overdue fine at the library.')
+        return redirect('view_books')
 
     with transaction.atomic():
         book = Book.objects.select_for_update().filter(id=book_id).first()
@@ -584,6 +642,7 @@ def return_book(request, record_id):
         return redirect('redirect_dashboard')
 
     record = get_object_or_404(BorrowRecord, id=record_id, user=request.user)
+    _refresh_overdue_fines(request.user)
     if record.status == 'returned':
         messages.warning(request, "This book has already been returned.")
         return redirect('my_borrowed_books')

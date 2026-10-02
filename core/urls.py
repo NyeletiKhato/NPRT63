@@ -32,6 +32,7 @@ urlpatterns = [
     path('api/my-books/', views.api_my_books, name='api_my_books'),
     path('api/my-books/<int:record_id>/return/', views.api_return_book, name='api_return_book'),
     path('api/admin/summary/', views.api_admin_summary, name='api_admin_summary'),
+    path('api/admin/fines/<int:record_id>/pay/', views.api_admin_pay_fine, name='api_admin_pay_fine'),
 
     path('', views.home, name='home'),
     path('user-entry/', views.user_entry, name='user_entry'),
