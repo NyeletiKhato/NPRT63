@@ -200,10 +200,10 @@ async function syncBorrowNotifications(userId) {
   }
 }
 async function processAutoReturns() {
-  const cutoff = addDays(dateToday(), -14);
+  const cutoff = addDays(dateToday(), -7);
   const rows = await many('borrow_records', db.from('borrow_records').select('*').eq('book_format', 'virtual').in('status', ['borrowed','overdue']).lte('borrow_date', cutoff));
   for (const row of rows) {
-    const returned = await one('borrow_records', db.from('borrow_records').update({ return_date: addDays(row.borrow_date, 14), status: 'returned' }).eq('id', row.id).in('status', ['borrowed','overdue']).select().maybeSingle());
+    const returned = await one('borrow_records', db.from('borrow_records').update({ return_date: addDays(row.borrow_date, 7), status: 'returned' }).eq('id', row.id).in('status', ['borrowed','overdue']).select().maybeSingle());
     if (!returned) continue;
     await writeAudit({}, 'virtual_loan_auto_returned', 'borrow_record', row.id, { member_id: row.user_id, book_id: row.book_id });
   }
