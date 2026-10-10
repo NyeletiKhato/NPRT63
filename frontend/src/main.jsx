@@ -543,7 +543,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
           <button className="primary" type="submit">Send confirmation email</button>
           <p className="auth-switch"><button type="button" onClick={() => setResendMode(false)}>Return to sign in</button></p>
         </> : <>
-          <label>Username<input autoComplete="username" placeholder={mode === 'login' ? 'Enter the username used at registration' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
+          <label>{mode === 'login' && role === 'user' ? 'Username or email' : 'Username'}<input autoComplete="username" placeholder={mode === 'login' ? 'Enter your username or registered email' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
           {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
           <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
           <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>

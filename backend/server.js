@@ -262,6 +262,13 @@ app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (
     const matches = await many('users', db.from('users').select('*').ilike('username', pattern).limit(2));
     if (matches.length === 1) user = matches[0];
   }
+  // Members may also sign in with their email address, provided it identifies
+  // exactly one active member account. Admins continue to use their username.
+  if (!user && username.includes('@')) {
+    const emailPattern = username.replace(/[\\%_]/g, '\\$&');
+    const matches = await many('users', db.from('users').select('*').ilike('email', emailPattern).eq('role', 'user').limit(2));
+    if (matches.length === 1) user = matches[0];
+  }
   const password = String(req.body.password || '');
   if (!user || Buffer.byteLength(password, 'utf8') > 72 || !passwordMatches(password, user.password_hash)) { await writeAudit(req, 'login_failed', 'user', username, { requested_role: req.body.role || 'user' }); return res.status(400).json({ error: 'Invalid username or password.' }); }
   if (!user.is_active || (user.role === 'user' && !user.email_verified) || user.role !== (req.body.role || 'user')) {
