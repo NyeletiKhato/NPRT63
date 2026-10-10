@@ -599,14 +599,30 @@ function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, on
 
 function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage }) {
   const [summary, setSummary] = useState(null);
-  const loadSummary = useCallback(() => api.get('/api/admin/summary/').then(setSummary).catch((error) => showMessage(error.message)), [api, showMessage]);
+  const [summaryError, setSummaryError] = useState('');
+  const loadSummary = useCallback(() => {
+    setSummaryError('');
+    return api.get('/api/admin/summary/')
+      .then((data) => { setSummary(data); setSummaryError(''); })
+      .catch((error) => { setSummaryError(error.message); showMessage(error.message); });
+  }, [api, showMessage]);
 
   useEffect(() => {
     loadSummary();
   }, [loadSummary]);
 
   if (!summary) {
-    return <section className="panel">Loading admin data...</section>;
+    return (
+      <section className="panel" role={summaryError ? 'alert' : 'status'}>
+        {summaryError ? (
+          <>
+            <h2>Admin data could not be loaded</h2>
+            <p>{summaryError}</p>
+            <button type="button" className="secondary" onClick={loadSummary}>Try again</button>
+          </>
+        ) : 'Loading admin data...'}
+      </section>
+    );
   }
 
   if (view === 'dashboard') {
