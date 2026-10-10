@@ -69,14 +69,15 @@ function getSouthAfricanPublicHolidays(year) {
 async function request(path, options = {}, csrfToken = '') {
   let response;
   try {
+    const { headers: extraHeaders = {}, ...fetchOptions } = options;
     response = await fetch(path, {
+      ...fetchOptions,
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
-        ...(options.headers || {}),
+        ...extraHeaders,
       },
-      ...options,
     });
   } catch {
     throw new Error('Cannot connect to the library service. Start the app with npm run dev and try again.');
@@ -203,7 +204,7 @@ function App() {
         </div>
         {user && (
           <div className="session">
-            {user.role === 'user' && <NotificationBell api={api} openNotifications={() => navigateView('notifications')} />}
+            <NotificationBell api={api} openNotifications={() => navigateView('notifications')} />
             {user.profile_photo ? <img className="session-avatar" src={user.profile_photo} alt="Your profile" /> : <span className="session-avatar avatar-fallback" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>}
             <span>{user.username}</span>
             <button type="button" onClick={handleLogout}>Sign out</button>
@@ -440,25 +441,36 @@ function EntryScreen({ setAuthScreen }) {
 
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
+  const [mfaStep, setMfaStep] = useState('credentials');
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaUrl, setMfaUrl] = useState('');
 
   async function submit(event) {
     event.preventDefault();
     try {
-      const data = mode === 'register'
-        ? await api.post('/api/register/', form)
-        : await api.post('/api/login/', { ...form, role });
-      if (data.csrfToken) {
-        setCsrfToken(data.csrfToken);
+      let data;
+      if (mode === 'login' && role === 'admin' && mfaStep !== 'credentials') {
+        const endpoint = mfaStep === 'setup' ? '/api/admin/mfa/confirm-setup/' : '/api/admin/mfa/verify/';
+        data = await api.post(endpoint, { code: mfaCode });
+      } else {
+        data = mode === 'register'
+          ? await api.post('/api/register/', form)
+          : await api.post('/api/login/', { ...form, role });
       }
-      setUser(data.user);
-      setView('dashboard');
-      resetHistory({ type: 'view', value: 'dashboard' });
-      showMessage('Signed in successfully.');
-    } catch (error) {
-      showMessage(error.message);
-    }
+      if (mode === 'register' && data.verification_required) { showMessage(data.message); setAuthScreen('login-user'); return; }
+      if (data.csrfToken) setCsrfToken(data.csrfToken);
+      if (data.mfa_required) { setMfaStep('challenge'); setMfaCode(''); return; }
+      if (data.mfa_setup_required) { setMfaStep('setup'); const setup = await request('/api/admin/mfa/setup/', { method: 'POST', body: '{}' }, data.csrfToken); setMfaUrl(setup.otpauthUrl); setMfaCode(''); return; }
+      if (!data.user) throw new Error('Admin verification was not completed. Please sign in again.');
+      // Verify the browser received a usable persisted session before switching workspaces.
+      const activeSession = await request('/api/session/');
+      if (!activeSession.user || activeSession.user.id !== data.user.id) throw new Error('Your sign-in could not be saved. Refresh the page and try again.');
+      if (activeSession.csrfToken) setCsrfToken(activeSession.csrfToken);
+      setUser(activeSession.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' }); showMessage('Signed in successfully.');
+    } catch (error) { showMessage(error.message); }
   }
 
+  const mfaFlow = mode === 'login' && role === 'admin' && mfaStep !== 'credentials';
   return (
     <section className="auth-page">
       <div className="auth-copy">
@@ -466,43 +478,25 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         <div className="auth-copy-layout">
           <div className="auth-copy-text">
             <p className="eyebrow">{mode === 'register' ? 'A new chapter starts here' : role === 'admin' ? 'Library team' : 'Welcome back'}</p>
-            <h2>{mode === 'register' ? 'Make yourself at home.' : role === 'admin' ? 'Good to see you.' : 'Ready for your next read?'}</h2>
-            <p>
-              {mode === 'register'
-                ? 'Create your account and start exploring the collection.'
-                : role === 'admin'
-                  ? 'Sign in to care for the collection and support your readers.'
-                  : 'Sign in to browse books and pick up where you left off.'}
-            </p>
+            <h2>{mfaStep === 'setup' ? 'Secure your admin account.' : mfaFlow ? 'Verify your identity.' : mode === 'register' ? 'Make yourself at home.' : role === 'admin' ? 'Good to see you.' : 'Ready for your next read?'}</h2>
+            <p>{mfaStep === 'setup' ? 'Scan this code with an authenticator app, then enter its six-digit code.' : mfaFlow ? 'Enter the current six-digit code from your authenticator app.' : mode === 'register' ? 'Create your account and start exploring the collection.' : role === 'admin' ? 'Sign in to care for the collection and support your readers.' : 'Sign in to browse books and pick up where you left off.'}</p>
           </div>
           <img className="auth-art" src={libraryBooks} alt="" />
         </div>
       </div>
       <form className="panel auth-form" onSubmit={submit}>
-        <h3>{mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
-        <label>
-          Username
-          <input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
-        </label>
-        {mode === 'register' && (
-          <label>
-            Email
-            <input type="text" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
-          </label>
-        )}
-        <label>
-          Password
-          <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required />
-        </label>
-        <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Sign in'}</button>
-        {mode === 'register' ? (
-          <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p>
-        ) : role === 'user' ? (
-          <>
-            <p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p>
-            <p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p>
-          </>
-        ) : null}
+        <h3>{mfaStep === 'setup' ? 'Set up authenticator' : mfaStep === 'challenge' ? 'Admin verification' : mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
+        {!mfaFlow ? <>
+          <label>Username<input autoComplete="username" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
+          {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
+          <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+          <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>
+        </> : <>
+          {mfaStep === 'setup' && mfaUrl && <div className="mfa-setup-code"><QRCodeSVG value={mfaUrl} size={190} level="M" includeMargin /><p>Scan with Google Authenticator, Microsoft Authenticator, or another TOTP app.</p></div>}
+          <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required /></label>
+          <button className="primary" type="submit">{mfaStep === 'setup' ? 'Enable and sign in' : 'Verify and sign in'}</button>
+        </>}
+        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
       </form>
     </section>
   );
@@ -567,7 +561,7 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
 
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['reservations', 'Reservations'], ['users', 'Members'], ['reports', 'Reports'], ['account', 'Account']]
+    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['users', 'Members'], ['reports', 'Reports'], ['account', 'Account']]
     : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['my-books', 'My Books'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['account', 'Account']];
 
   return (
@@ -592,15 +586,15 @@ function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, on
     return <MyReservations api={api} showMessage={showMessage} />;
   }
   if (view === 'notifications') {
-    return <NotificationCenter api={api} showMessage={showMessage} />;
+    return <NotificationCenter api={api} showMessage={showMessage} role={user.role} />;
   }
   if (view === 'recommendations') {
-    return <Recommendations api={api} setView={setView} showMessage={showMessage} />;
+    return <Recommendations api={api} showMessage={showMessage} />;
   }
   if (view === 'account') {
     return <AccountSettings api={api} user={user} onUserChange={onUserChange} onDeactivated={onDeactivated} showMessage={showMessage} />;
   }
-  return <BookBrowser api={api} canBorrow setView={setView} showMessage={showMessage} />;
+  return <BookBrowser api={api} canBorrow showMessage={showMessage} />;
 }
 
 function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage }) {
@@ -626,6 +620,9 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
   }
   if (view === 'reservations') {
     return <ReservationTable reservations={summary.reservations} />;
+  }
+  if (view === 'notifications') {
+    return <NotificationCenter api={api} showMessage={showMessage} role={user.role} />;
   }
   if (view === 'users') {
     return <UserManager users={summary.users} api={api} reload={loadSummary} showMessage={showMessage} />;
@@ -795,12 +792,17 @@ function AdminDashboard({ summary, setView }) {
           <Stat label="Returned" value={summary.stats.total_returned} />
           <Stat label="Members" value={summary.stats.total_users} />
           <Stat label="Reservations" value={summary.stats.active_reservations} />
+          <Stat label="Borrow approvals" value={summary.stats.pending_borrow_approvals || 0} />
+          <Stat label="Return approvals" value={summary.stats.pending_return_approvals || 0} />
+          <Stat label="Low stock titles" value={summary.stats.low_stock_books || 0} />
         </div>
       </div>
       <div className="dashboard-grid">
         <DashboardAction tone="blue" title="Manage Books" text="Add, update, and delete books." action="Manage" onClick={() => setView('books')} />
         <DashboardAction tone="cyan" title="Manage Members" text="View library members and administrators." action="View members" onClick={() => setView('users')} />
-        <DashboardAction tone="amber" title="View Borrowed Books" text="See all borrowed books." action="View records" onClick={() => setView('borrowed')} />
+        <DashboardAction tone="amber" title="Borrowing Approvals" text={(summary.stats.pending_borrow_approvals || 0) + ' borrow requests and ' + (summary.stats.pending_return_approvals || 0) + ' return requests need review.'} action="Review requests" onClick={() => setView('borrowed')} />
+        <DashboardAction tone="red" title="Inventory and Alerts" text={(summary.stats.low_stock_books || 0) + ' titles are at or below the low-stock threshold.'} action="View alerts" onClick={() => setView('notifications')} />
+        <DashboardAction tone="blue" title="View Borrowed Books" text="See all borrowing records." action="View records" onClick={() => setView('borrowed')} />
         <DashboardAction tone="red" title="Reservation Queue" text="View members waiting for unavailable books." action="Open queue" onClick={() => setView('reservations')} />
         <DashboardAction tone="green" title="View Reports" text="Review totals and library activity." action="Open reports" onClick={() => setView('reports')} />
       </div>
@@ -817,7 +819,7 @@ function Stat({ label, value }) {
   );
 }
 
-function Recommendations({ api, setView, showMessage }) {
+function Recommendations({ api, showMessage }) {
   const [books, setBooks] = useState([]);
   const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
   const [input, setInput] = useState('');
@@ -1130,7 +1132,6 @@ function Recommendations({ api, setView, showMessage }) {
           setBorrowChoiceBook(null);
           const data = await api.get('/api/books/');
           setBooks(data.books.filter((item) => item.available_copies > 0 || item.has_virtual_version));
-          setView('my-books');
         }}
         onReserve={async () => {
           try {
@@ -1147,7 +1148,7 @@ function Recommendations({ api, setView, showMessage }) {
   );
 }
 
-function BookBrowser({ api, canBorrow, setView, showMessage }) {
+function BookBrowser({ api, canBorrow, showMessage }) {
   const [books, setBooks] = useState([]);
   const [query, setQuery] = useState('');
   const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
@@ -1200,7 +1201,10 @@ function BookBrowser({ api, canBorrow, setView, showMessage }) {
             </div>
             <div className="book-actions">
               <strong>{book.available_copies}/{book.quantity} available</strong>
-              {canBorrow && <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>}
+              {canBorrow && (book.available_copies > 0 || book.has_virtual_version
+                ? <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>
+                : <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>)}
+              {canBorrow && book.available_copies <= 0 && book.has_virtual_version && <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>}
             </div>
           </article>
         ))}
@@ -1210,7 +1214,7 @@ function BookBrowser({ api, canBorrow, setView, showMessage }) {
         api={api}
         book={borrowChoiceBook}
         onClose={() => setBorrowChoiceBook(null)}
-        onBorrowed={async () => { setBorrowChoiceBook(null); await loadBooks(); setView('my-books'); }}
+        onBorrowed={async () => { setBorrowChoiceBook(null); await loadBooks(); }}
         onReserve={() => { setBorrowChoiceBook(null); reserve(borrowChoiceBook); }}
         showMessage={showMessage}
       />}
@@ -1228,8 +1232,8 @@ function BorrowFormatDialog({ api, book, onClose, onBorrowed, onReserve, showMes
     try {
       await api.post(`/api/books/${book.id}/borrow/`, { format });
       showMessage(format === 'physical'
-        ? 'Your physical book has been reserved for collection. Please collect it from the library.'
-        : 'Virtual book borrowed.');
+        ? 'Your physical book request was sent to the library for approval.'
+        : 'Virtual book borrowed. Open My Borrowed Books to read it.');
       await onBorrowed();
     } catch (error) {
       showMessage(error.message);
@@ -1287,7 +1291,7 @@ function NotificationBell({ api, openNotifications }) {
   );
 }
 
-function NotificationCenter({ api, showMessage }) {
+function NotificationCenter({ api, showMessage, role = 'user' }) {
   const [notifications, setNotifications] = useState([]);
 
   const loadNotifications = useCallback(async () => {
@@ -1318,7 +1322,7 @@ function NotificationCenter({ api, showMessage }) {
   return (
     <section className="panel notifications-panel">
       <div className="notification-heading">
-        <div><p className="eyebrow">Library Updates</p><h2>Notifications</h2><p>Due dates, overdue books, and reservation updates appear here.</p></div>
+        <div><p className="eyebrow">Library Updates</p><h2>Notifications</h2><p>{role === 'admin' ? 'Low inventory and physical book requests awaiting approval appear here.' : 'Due dates, overdue books, and reservation updates appear here.'}</p></div>
         {unreadCount > 0 && <button type="button" className="secondary" onClick={markAllRead}>Mark all as read</button>}
       </div>
       <div className="notification-list">
@@ -1390,29 +1394,13 @@ function BorrowedBooks({ api, showMessage }) {
   }
 
   useEffect(() => {
-    let active = true;
-    const refreshRecords = () => loadRecords().catch((error) => {
-      if (active) showMessage(error.message);
-    });
-    const refreshOnFocus = () => {
-      if (document.visibilityState === 'visible') refreshRecords();
-    };
-    refreshRecords();
-    const timer = window.setInterval(refreshRecords, 4000);
-    window.addEventListener('focus', refreshOnFocus);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-      window.removeEventListener('focus', refreshOnFocus);
-    };
-  }, [api, showMessage]);
+    loadRecords().catch((error) => showMessage(error.message));
+  }, []);
 
   async function returnBook(record) {
     try {
       await api.post('/api/my-books/' + record.id + '/return/');
-      showMessage(record.book_format === 'physical'
-        ? 'Return submitted. The library administrator must confirm receipt.'
-        : 'Book returned.');
+      showMessage(record.book_format === 'physical' ? 'Return request sent to the library for approval.' : 'Book returned.');
       await loadRecords();
     } catch (error) {
       showMessage(error.message);
@@ -1426,29 +1414,28 @@ function BorrowedBooks({ api, showMessage }) {
   return (
     <section className="panel">
       <h2>My Borrowed Books</h2>
-      <p className="loan-policy-note">Virtual books return automatically after 7 days. Physical books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
+      <p className="loan-policy-note">Please return physical books by their due date. Books still unreturned 14 days after borrowing are automatically returned, and the member account is deactivated.</p>
       <div className="table">
         {records.map((record) => {
           const isVirtual = record.book_format === 'virtual';
-          const isActive = record.status !== 'returned';
+          const isActive = ['borrowed', 'overdue'].includes(record.status);
+          const isPending = record.status === 'pending_approval';
           return <div className="row borrowed-book-row" key={record.id}>
             <span><strong>{record.book.title}</strong><small>{record.book.author}</small></span>
             <span className={'format-badge ' + (isVirtual ? 'virtual-badge' : 'physical-badge')}>{isVirtual ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{record.return_confirmation_pending ? 'Return Pending Confirmation' : record.status === 'returned' ? 'Returned' : record.status}</span>
-            <span>Due {record.due_date}</span>
+            <span>{isPending ? 'Awaiting approval' : record.status === 'rejected' ? 'Request declined' : record.return_requested_at ? 'Return awaiting approval' : record.status}</span>
+            <span>{isActive ? 'Due ' + record.due_date : ''}</span>
             {isVirtual && isActive && <div className="borrowed-book-actions">
               <button type="button" onClick={() => setReaderRecord(record)}>Read Book</button>
-              <a className="button-link secondary" href={'/api/my-books/' + record.id + '/content/?download=1'}>Download Book</a>
             </div>}
-            {!isVirtual && isActive && <span className={record.return_confirmation_pending ? 'collection-pending' : record.collection_confirmed ? 'collection-confirmed' : 'collection-required'}>
-              {record.return_confirmation_pending
-                ? 'Return received by the library; awaiting administrator confirmation.'
-                : record.collection_confirmed
-                  ? 'Collection confirmed by the library.'
-                  : 'Collection Required: collect this book from the library. An administrator must confirm collection before return.'}
+            {isPending && <span className="collection-required">Your physical book request is waiting for library approval.</span>}
+            {!isVirtual && isActive && <span className={record.collection_confirmed ? 'collection-confirmed' : 'collection-required'}>
+              {record.collection_confirmed
+                ? record.return_requested_at ? 'Your return is waiting for library approval.' : 'Collection confirmed by the library. You can now return this book.'
+                : 'Collection Required: collect this book from the library. An administrator must confirm collection before you can return it.'}
             </span>}
             {isVirtual && isActive && <button type="button" className="secondary" onClick={() => returnBook(record)}>Return Book</button>}
-            {!isVirtual && isActive && record.collection_confirmed && !record.return_confirmation_pending && <button type="button" className="secondary" onClick={() => returnBook(record)}>Submit Return</button>}
+            {!isVirtual && isActive && record.collection_confirmed && !record.return_requested_at && <button type="button" className="secondary" onClick={() => returnBook(record)}>Request Return</button>}
           </div>;
         })}
         {!records.length && <div className="empty-state">You have no borrowed books.</div>}
@@ -1471,7 +1458,7 @@ function BookReader({ api, record, onClose, showMessage }) {
       .catch((error) => showMessage(error.message));
   }, [api, record.id, isPdf, showMessage]);
 
-  const pdfSource = '/api/my-books/' + record.id + '/content/#page=' + (page + 1) + '&zoom=' + Math.round(zoom * 100);
+  const pdfSource = '/api/my-books/' + record.id + '/content/#toolbar=0&page=' + (page + 1) + '&zoom=' + Math.round(zoom * 100);
   return (
     <section className="panel book-reader">
       <div className="reader-header">
@@ -1498,7 +1485,6 @@ function BookReader({ api, record, onClose, showMessage }) {
         : <article className="text-reader-page" style={{ fontSize: zoom + 'rem' }}>{text ? pages[page] : 'Loading virtual book…'}</article>}
       <div className="reader-footer">
         <button type="button" className="secondary" onClick={onClose}>Close Reader</button>
-        <a className="button-link" href={'/api/my-books/' + record.id + '/content/?download=1'}>Download Book</a>
       </div>
     </section>
   );
@@ -1608,6 +1594,10 @@ function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
 }
 
 function RecordTable({ records, api, reload, showMessage }) {
+  async function decide(record, action) {
+    try { await api.post('/api/admin/borrow-records/' + record.id + '/decision/', { action }); await reload(); showMessage('Request updated.'); }
+    catch (error) { showMessage(error.message); }
+  }
   async function confirmCollection(record) {
     try {
       await api.post('/api/admin/borrow-records/' + record.id + '/collection/');
@@ -1618,38 +1608,20 @@ function RecordTable({ records, api, reload, showMessage }) {
     }
   }
 
-  async function confirmReturn(record) {
-    try {
-      await api.post('/api/admin/borrow-records/' + record.id + '/return/');
-      await reload();
-      showMessage('Return confirmed for ' + record.user.username + '.');
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
-
   return (
     <section className="panel">
       <h2>Borrowed Books</h2>
-      <div className="table admin-record-table">
-        <div className="row admin-record-header" aria-hidden="true">
-          <strong>Member</strong><strong>Book</strong><strong>Format</strong><strong>Loan Status</strong><strong>Due Date</strong><strong>Collection</strong><strong>Admin Action</strong>
-        </div>
+      <div className="table">
         {records.map((record) => (
-          <div className="row admin-borrow-record-row" key={record.id}>
+          <div className="row" key={record.id}>
             <span>{record.user.username}</span>
             <span>{record.book.title}</span>
             <span className={'format-badge ' + (record.book_format === 'virtual' ? 'virtual-badge' : 'physical-badge')}>{record.book_format === 'virtual' ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{record.return_confirmation_pending ? 'Return Pending Confirmation' : record.status}</span>
+            <span>{record.status}</span>
             <span>Due {record.due_date}</span>
-            <span>{record.book_format === 'virtual' ? 'Not required' : record.collection_confirmed ? 'Collected' : 'Awaiting collection'}</span>
-            <div className="admin-record-actions">
-              {record.book_format !== 'virtual' && record.status !== 'returned' && !record.collection_confirmed && <button type="button" onClick={() => confirmCollection(record)}>Confirm Collection</button>}
-              {record.book_format !== 'virtual' && record.status !== 'returned' && record.return_confirmation_pending && <button type="button" onClick={() => confirmReturn(record)}>Confirm Return</button>}
-              {record.book_format !== 'virtual' && record.status !== 'returned' && !record.return_confirmation_pending && record.collection_confirmed && <span className="collection-confirmed">Waiting for member return</span>}
-              {record.status === 'returned' && <span className="collection-confirmed">Complete</span>}
-              {record.book_format === 'virtual' && record.status !== 'returned' && <span>Member managed</span>}
-            </div>
+            {record.status === 'pending_approval' && <div className="borrowed-book-actions"><button type="button" className="primary" onClick={() => decide(record, 'approve_borrow')}>Approve Borrow</button><button type="button" className="secondary" onClick={() => decide(record, 'reject_borrow')}>Decline</button></div>}
+            {record.status !== 'pending_approval' && record.return_requested_at && <div className="borrowed-book-actions"><button type="button" className="primary" onClick={() => decide(record, 'approve_return')}>Approve Return</button><button type="button" className="secondary" onClick={() => decide(record, 'reject_return')}>Decline Return</button></div>}
+            {record.book_format !== 'virtual' && record.status === 'borrowed' && !record.return_requested_at && (record.collection_confirmed ? <span className="collection-confirmed">Collection confirmed</span> : <button type="button" onClick={() => confirmCollection(record)}>Confirm Collection</button>)}
           </div>
         ))}
         {!records.length && <div className="empty-state">No borrowing records yet.</div>}

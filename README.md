@@ -7,7 +7,7 @@
 
 ## Overview
 
-This is a Library Management System with a React frontend and a Node.js (Express + SQLite) backend. It supports role-based access, catalogue management, borrowing and returns, reservations, reports, reading recommendations, and in-app notifications.
+This is a Library Management System with a React/Vite frontend and a Node.js/Express API. Supabase PostgreSQL stores application data and Supabase Storage stores private virtual book files.
 
 ## Run locally
 
@@ -15,6 +15,8 @@ This is a Library Management System with a React frontend and a Node.js (Express
 npm install
 npm run dev       # React development server and Node API
 ```
+
+Copy `.env.example` to `.env`, fill in your Supabase project URL and service role key, and run `supabase/schema.sql` once in the Supabase SQL Editor. For an existing project, also run `supabase/email_verification_migration.sql`, `supabase/physical_approvals_migration.sql`, `supabase/inventory_concurrency_migration.sql`, and `supabase/security_hardening_migration.sql` (in that order). If needed, run `supabase/fix_service_role_grants.sql` there to grant the Node API access to the tables. Keep the service role key server-side and never use a `VITE_` prefix for it.
 
 Open `http://127.0.0.1:5173/static/react/`. The development command starts both
 the React site and the borrowing API, so catalogue actions such as **Borrow** work
@@ -32,19 +34,17 @@ QR code contains.
 
 For production, run `npm run build` and then `npm start`.
 
-New member registrations are available immediately and do not require email confirmation.
+New member registrations require email confirmation. For Gmail, use `smtp.gmail.com` with port `587` and TLS. Set `SMTP_USER` and `MAIL_FROM` to the Gmail sender address and `SMTP_PASSWORD` to that account's Google App Password. Google requires 2-Step Verification for App Passwords. Set `PUBLIC_APP_URL` to the deployed app URL. Confirmation links expire after 24 hours; unverified members cannot sign in.
 
-The Node/Express backend in `backend/server.js` is the active application backend. The Django directory is retained only as a legacy data source for the optional migration command; it is not required to run the application.
+The Node/Express backend in `backend/server.js` is the active application backend. The Django directory and SQLite file are retained only as a legacy data source; they are not required to run the application.
 
 ### Password reset
 
-Use **Forgot password?** on the member login screen. In development, the one-time reset code is shown in the interface and server terminal; it expires after 15 minutes. Before deploying publicly, connect this flow to an email provider and set `NODE_ENV=production`, `SESSION_SECRET`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`.
+Use **Forgot password?** on the member login screen. The one-time reset code expires after 15 minutes. It is emailed when SMTP is configured; only local development may display it in the interface. Configure Gmail SMTP before public deployment.
 
-The API uses cookie sessions. On a new database, the server creates `admin` / `admin123`; configure `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SESSION_SECRET` before deploying.
+The API requires CSRF tokens, throttles sign-in/registration/reset/MFA attempts through Supabase, stores sessions in Supabase with an eight-hour expiry, and requires authenticator-based MFA for admins. Admin actions are recorded in a database append-only audit table; for independent tamper evidence, export these records to a separate protected logging account. The library portal sends security headers, and its network-address helper is disabled in production. Physical borrowing and returns wait for admin approval and generate in-app admin notifications. Borrow requests reserve an available copy atomically, so concurrent requests cannot claim the same last copy. Inventory edits are checked against borrowed and reserved copies, and available copies cannot exceed total quantity. Admins also receive low-stock alerts when available copies reach `LOW_STOCK_THRESHOLD` (defaults to 2). The admin notification bell refreshes every minute. Physical loans are no longer auto-returned; admins approve each physical return request. The API uses cookie sessions and stores its user, catalogue, lending, reservation, notification, report, and audit data in Supabase. Set `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SESSION_SECRET`, and a stable random `MFA_ENCRYPTION_KEY` of at least 32 characters before deploying. Admins enroll an authenticator app at their next sign-in. Back up the MFA encryption key securely; losing it requires admins to enroll again through a trusted database operator. To retain existing Django records, run `npm run migrate-django-data` after applying the schema and setting the Supabase environment variables. Django PBKDF2 passwords remain valid and are upgraded to bcrypt after a successful login.
 
-To retain the existing Django SQLite data, run `npm run migrate-django-data` before the first Node server start. Existing Django PBKDF2 passwords remain valid and are upgraded to bcrypt after a successful login.
-
-Written with React, Vite, Express, SQLite, and bcrypt.
+Written with React, Vite, Express, Supabase, and bcrypt.
 
 1. Methodologies/Project Management:
 
@@ -57,7 +57,7 @@ Written with React, Vite, Express, SQLite, and bcrypt.
 
 3. Programming Languages/Frameworks:
 
-   - JavaScript, React, Node.js, Express, SQLite
+   - JavaScript, React, Node.js, Express, Supabase
 
 ## Instructions
 

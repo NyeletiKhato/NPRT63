@@ -1,34 +1,58 @@
-/* Imports the existing Django SQLite data into backend/library.db.
-   Run before starting the Node server for the first time. */
-const fs = require('fs');
+// Imports the legacy Django SQLite records into the Supabase tables.
 const path = require('path');
-const Database = require('better-sqlite3');
+const fs = require('fs');
+require('dotenv').config();
+const initSqlJs = require('sql.js');
+const { createClient } = require('@supabase/supabase-js');
 
-const root = path.join(__dirname, '..');
-const sourcePath = path.join(root, 'db.sqlite3');
-const targetPath = path.join(__dirname, 'library.db');
-if (!fs.existsSync(sourcePath)) throw new Error('Django database db.sqlite3 was not found.');
-if (fs.existsSync(targetPath)) throw new Error('backend/library.db already exists. Remove it only if you want to repeat the import.');
+const sourcePath = path.join(__dirname, '..', 'db.sqlite3');
+if (!fs.existsSync(sourcePath)) throw new Error(`Django database not found: ${sourcePath}`);
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY first.');
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const chunks = (items, size = 250) => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size));
+let source;
+function read(table) {
+  const statement = source.prepare(`SELECT * FROM ${table}`);
+  const rows = [];
+  while (statement.step()) rows.push(statement.getAsObject());
+  statement.free();
+  return rows;
+}
+async function upsert(table, rows, onConflict) {
+  for (const group of chunks(rows)) {
+    const { error } = await supabase.from(table).upsert(group, { onConflict, ignoreDuplicates: false });
+    if (error) throw new Error(`${table}: ${error.message}`);
+  }
+}
+async function run() {
+  const SQL = await initSqlJs({ locateFile: (file) => require.resolve(`sql.js/dist/${file}`) });
+  source = new SQL.Database(new Uint8Array(fs.readFileSync(sourcePath)));
+  const oldUsers = read('core_customuser');
+  const oldBooks = read('core_book');
+  const oldRecords = read('core_borrowrecord');
+  const oldActivities = read('core_loginactivity');
 
-const source = new Database(sourcePath, { readonly: true });
-const target = new Database(targetPath);
-target.pragma('foreign_keys = ON');
-target.exec(`
-  CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL DEFAULT '', password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin', 'user')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-  CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL, isbn TEXT NOT NULL UNIQUE, category TEXT NOT NULL, quantity INTEGER NOT NULL, available_copies INTEGER NOT NULL);
-  CREATE TABLE borrow_records (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE, borrow_date TEXT NOT NULL, due_date TEXT NOT NULL, return_date TEXT, status TEXT NOT NULL CHECK(status IN ('borrowed', 'returned', 'overdue')) DEFAULT 'borrowed');
-  CREATE TABLE login_activities (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, logged_in_at TEXT NOT NULL);
-`);
-const rows = (table) => source.prepare(`SELECT * FROM ${table}`).all();
-const insertUser = target.prepare('INSERT INTO users (id, username, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?)');
-const insertBook = target.prepare('INSERT INTO books (id, title, author, isbn, category, quantity, available_copies) VALUES (?, ?, ?, ?, ?, ?, ?)');
-const insertRecord = target.prepare('INSERT INTO borrow_records (id, user_id, book_id, borrow_date, due_date, return_date, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
-const insertActivity = target.prepare('INSERT INTO login_activities (id, user_id, logged_in_at) VALUES (?, ?, ?)');
-target.transaction(() => {
-  for (const user of rows('core_customuser')) insertUser.run(user.id, user.username, user.email || '', user.password, user.role, user.date_joined || new Date().toISOString());
-  for (const book of rows('core_book')) insertBook.run(book.id, book.title, book.author, book.isbn, book.category, Math.max(book.quantity, book.available_copies), Math.max(0, book.available_copies));
-  for (const record of rows('core_borrowrecord')) insertRecord.run(record.id, record.user_id, record.book_id, String(record.borrow_date).slice(0, 10), String(record.due_date).slice(0, 10), record.return_date ? String(record.return_date).slice(0, 10) : null, record.status);
-  for (const activity of rows('core_loginactivity')) insertActivity.run(activity.id, activity.user_id, activity.logged_in_at);
-})();
-source.close(); target.close();
-console.log('Django data imported into backend/library.db. Django password hashes are retained and are upgraded after each successful Node login.');
+  // This is a one-time data import. Refuse a repeat run so it cannot restore
+  // members that were deliberately removed or duplicate loans and audit rows.
+  const importedUsers = await supabase.from('users').select('username').in('username', oldUsers.map((u) => u.username).slice(0, 200));
+  if (importedUsers.error) throw importedUsers.error;
+  if (importedUsers.data?.length) throw new Error('Legacy users are already present in Supabase. Refusing to rerun the import and duplicate or restore records.');
+
+  await upsert('users', oldUsers.map((u) => ({ username: u.username, email: (u.email || '').toLowerCase(), password_hash: u.password, role: u.role, is_active: u.is_active ?? true, email_verified: true, created_at: u.date_joined || new Date().toISOString() })), 'username');
+  await upsert('books', oldBooks.map((b) => ({ title: b.title, author: b.author, isbn: b.isbn, category: b.category, quantity: Math.max(b.quantity, b.available_copies), available_copies: Math.max(0, b.available_copies) })), 'isbn');
+
+  const users = await supabase.from('users').select('id,username');
+  if (users.error) throw users.error;
+  const userIds = new Map(users.data.map((u) => [u.username, u.id]));
+  const books = await supabase.from('books').select('id,isbn');
+  if (books.error) throw books.error;
+  const bookIds = new Map(books.data.map((b) => [b.isbn, b.id]));
+  const oldUserNames = new Map(oldUsers.map((u) => [u.id, u.username]));
+  const oldBookIsbns = new Map(oldBooks.map((b) => [b.id, b.isbn]));
+
+  await upsert('borrow_records', oldRecords.map((r) => ({ user_id: userIds.get(oldUserNames.get(r.user_id)), book_id: bookIds.get(oldBookIsbns.get(r.book_id)), borrow_date: String(r.borrow_date).slice(0, 10), due_date: String(r.due_date).slice(0, 10), return_date: r.return_date ? String(r.return_date).slice(0, 10) : null, status: r.status })).filter((r) => r.user_id && r.book_id), 'id');
+  const loginRows = oldActivities.map((a) => ({ user_id: userIds.get(oldUserNames.get(a.user_id)), logged_in_at: a.logged_in_at })).filter((a) => a.user_id);
+  for (const group of chunks(loginRows)) { const { error } = await supabase.from('login_activities').insert(group); if (error) throw error; }
+  console.log(`Imported ${oldUsers.length} members, ${oldBooks.length} books, ${oldRecords.length} loans, and ${loginRows.length} login events.`);
+}
+run().catch((error) => { console.error('Supabase data import failed:', error.message); process.exitCode = 1; }).finally(() => source?.close());

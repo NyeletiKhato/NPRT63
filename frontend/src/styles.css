@@ -1546,3 +1546,6 @@ select {
   .auth-art { max-height: 96px; }
   .auth-form { border-radius: 18px; padding: 20px 18px; }
 }
+
+.mfa-setup-code { display: grid; justify-items: center; gap: 0.75rem; padding: 1rem; border: 1px solid var(--line, #dce5df); border-radius: 1rem; background: #fff; text-align: center; }
+.mfa-setup-code p { margin: 0; font-size: 0.9rem; color: var(--muted, #66736c); }

@@ -8,15 +8,17 @@
     "preview": "vite preview --host 127.0.0.1 --port 4173 --configLoader runner"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "@vitejs/plugin-react": "^5.0.0",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "express-session": "^1.18.1",
     "nodemailer": "^10.0.10",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "sql.js": "^1.14.2",
     "vite": "^7.0.0"
   }
 }
