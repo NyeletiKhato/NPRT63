@@ -351,31 +351,52 @@ app.post('/api/account/deactivate/', requireAuth, requireRole('user'), endpoint(
 app.put('/api/account/profile-photo/', requireAuth, endpoint(async (req, res) => { const photo = String(req.body.photo || ''); if (!/^data:image\/(png|jpe?g|webp|gif);base64,[a-zA-Z0-9+/=]+$/.test(photo) || photo.length > 2 * 1024 * 1024) return res.status(400).json({ error: 'Choose a PNG, JPEG, WEBP, or GIF image smaller than 1.5 MB.' }); fail((await db.from('users').update({ profile_photo: photo }).eq('id', req.user.id)).error); res.json({ user: safeUser(await getUser(req.user.id)) }); }));
 app.delete('/api/account/profile-photo/', requireAuth, endpoint(async (req, res) => { fail((await db.from('users').update({ profile_photo: '' }).eq('id', req.user.id)).error); res.json({ user: safeUser(await getUser(req.user.id)) }); }));
 
+async function findMemberForPasswordReset(identifier) {
+  const value = String(identifier || '').trim().slice(0, 254);
+  if (!value) return null;
+  const pattern = value.replace(/[\\%_]/g, '\\$&');
+  const column = value.includes('@') ? 'email' : 'username';
+  const matches = await many('users', db.from('users').select('id,username,email').ilike(column, pattern).eq('role', 'user').limit(2));
+  return matches.length === 1 ? matches[0] : null;
+}
+
 app.post('/api/password-reset/request/', resetLimiter, endpoint(async (req, res) => {
-  const username = String(req.body.username || '').trim().slice(0, 64), email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
-  const u = await one('users', db.from('users').select('id,email').eq('username', username).maybeSingle());
-  const generic = { message: 'If the account details match, a reset code has been created.' };
-  if (!u?.email || u.email.toLowerCase() !== email) return res.json(generic);
+  const identifier = String(req.body.username || '').trim().slice(0, 254);
+  const generic = { message: 'If the account details match, a reset code has been emailed. Check your inbox and spam folder.' };
+  const localOnly = ['127.0.0.1','::1'].includes(req.ip) || String(req.ip || '').startsWith('::ffff:127.');
+  if ((!mailer || !mailFrom) && (process.env.NODE_ENV === 'production' || !localOnly)) {
+    return res.status(503).json({ error: 'Password reset email is not configured on the server. Please contact library staff.' });
+  }
+  const u = await findMemberForPasswordReset(identifier);
+  if (!u?.email) return res.json(generic);
   const code = crypto.randomBytes(16).toString('hex').toUpperCase();
   await db.from('password_reset_tokens').update({ used_at: new Date().toISOString() }).eq('user_id', u.id).is('used_at', null);
   fail((await db.from('password_reset_tokens').insert({ user_id: u.id, token_hash: hashToken(code), expires_at: new Date(Date.now() + 900000).toISOString() })).error);
-  const localOnly = ['127.0.0.1','::1'].includes(req.ip) || String(req.ip || '').startsWith('::ffff:127.');
-  if (mailer && mailFrom && u.email) await mailer.sendMail({ from: mailFrom, to: u.email, subject: 'Library password reset', text: `Your library password reset code is ${code}. It expires in 15 minutes.` });
-  else if (process.env.NODE_ENV !== 'production' && localOnly) generic.reset_code = code;
+  if (mailer && mailFrom) {
+    try {
+      await mailer.sendMail({ from: mailFrom, to: u.email, subject: 'Library password reset', text: `Your library password reset code is ${code}. It expires in 15 minutes.` });
+    } catch (error) {
+      await db.from('password_reset_tokens').update({ used_at: new Date().toISOString() }).eq('user_id', u.id).is('used_at', null);
+      logEvent('error', 'password_reset_email_failed', { request_id: req.requestId, error_code: error.code || 'unknown' });
+      return res.status(503).json({ error: 'The reset email could not be sent. Please try again later or contact library staff.' });
+    }
+  } else if (process.env.NODE_ENV !== 'production' && localOnly) generic.reset_code = code;
   res.json(generic);
 }));
 app.post('/api/password-reset/confirm/', resetLimiter, endpoint(async (req, res) => {
-  const username = String(req.body.username || '').trim().slice(0, 64);
+  const identifier = String(req.body.username || '').trim().slice(0, 254);
   const code = String(req.body.code || '').trim().toUpperCase();
   const password = String(req.body.password || '');
   if (!/^[A-F0-9]{32}$/.test(code)) return res.status(400).json({ error: 'Invalid or expired reset code.' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Use a password between 8 and 72 UTF-8 bytes.' });
+  const user = await findMemberForPasswordReset(identifier);
+  if (!user) return res.status(400).json({ error: 'Invalid or expired reset code.' });
   const passwordHash = bcrypt.hashSync(password, 12);
-  const { data: userId, error } = await db.rpc('consume_password_reset', { p_username: username, p_token_hash: hashToken(code), p_password_hash: passwordHash });
+  const { data: userId, error } = await db.rpc('consume_password_reset', { p_username: user.username, p_token_hash: hashToken(code), p_password_hash: passwordHash });
   fail(error);
   if (!userId) return res.status(400).json({ error: 'Invalid or expired reset code.' });
-  const user = await getUser(userId);
-  await writeAudit({ ...req, user }, 'password_reset_completed', 'user', user.id);
+  const updatedUser = await getUser(userId);
+  await writeAudit({ ...req, user: updatedUser }, 'password_reset_completed', 'user', updatedUser.id);
   res.json({ message: 'Password reset successfully. You can now sign in.' });
 }));
 

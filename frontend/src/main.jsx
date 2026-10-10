@@ -560,7 +560,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
 
 function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
   const [step, setStep] = useState('request');
-  const [form, setForm] = useState({ username: '', email: '', code: '', password: '' });
+  const [form, setForm] = useState({ username: '', code: '', password: '' });
   const [demoCode, setDemoCode] = useState('');
 
   async function requestCode(event) {
@@ -590,7 +590,7 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
           <div className="auth-copy-text">
             <p className="eyebrow">Account recovery</p>
             <h2>Let's get you back in.</h2>
-            <p>{step === 'request' ? 'Enter your account details to request a one-time reset code.' : 'Enter the one-time code and choose a new password.'}</p>
+            <p>{step === 'request' ? 'Enter your username or registered email to request a one-time reset code.' : 'Enter the one-time code and choose a new password.'}</p>
           </div>
           <img className="auth-art" src={libraryBooks} alt="" />
         </div>
@@ -598,8 +598,7 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
       {step === 'request' ? (
         <form className="panel auth-form" onSubmit={requestCode}>
           <h3>Request reset code</h3>
-          <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
-          <label>Email address<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>
+          <label>Username or email<input autoComplete="username" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
           <button className="primary" type="submit">Request code</button>
         </form>
       ) : (
