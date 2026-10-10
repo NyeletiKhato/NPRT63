@@ -38,7 +38,7 @@ e2e/*.map
 *.pyc
 __pycache__/
 local_settings.py
-#db.sqlite3
+db.sqlite3
 db.sqlite3-journal
 backend/library.db
 backend/private-books/
@@ -1600,6 +1600,7 @@ FodyWeavers.xsd
 !*r-imp/global.R
 !*r-imp/to-clean/*
 !*assets/*
+!frontend/src/library-books.svg
 
 ### VisualStudio Patch ###
 # Additional files built by Visual Studio

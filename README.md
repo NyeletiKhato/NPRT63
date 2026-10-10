@@ -16,7 +16,7 @@ npm install
 npm run dev       # React development server and Node API
 ```
 
-Copy `.env.example` to `.env`, fill in your Supabase project URL and service role key, and run `supabase/schema.sql` once in the Supabase SQL Editor. For an existing project, also run `supabase/email_verification_migration.sql`, `supabase/physical_approvals_migration.sql`, `supabase/inventory_concurrency_migration.sql`, and `supabase/security_hardening_migration.sql` (in that order). If needed, run `supabase/fix_service_role_grants.sql` there to grant the Node API access to the tables. Keep the service role key server-side and never use a `VITE_` prefix for it.
+Copy `.env.example` to `.env`, replace every placeholder with real values, fill in your Supabase project URL and service role key, and run `supabase/schema.sql` once in the Supabase SQL Editor. For an existing project, also run `supabase/email_verification_migration.sql`, `supabase/physical_approvals_migration.sql`, `supabase/inventory_concurrency_migration.sql`, `supabase/security_hardening_migration.sql`, and `supabase/notification_integrity_migration.sql` (in that order). If needed, run `supabase/fix_service_role_grants.sql` there to grant the Node API access to the tables. Keep the service role key server-side and never use a `VITE_` prefix for it.
 
 Open `http://127.0.0.1:5173/static/react/`. The development command starts both
 the React site and the borrowing API, so catalogue actions such as **Borrow** work

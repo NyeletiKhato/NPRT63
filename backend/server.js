@@ -135,12 +135,12 @@ async function sendVerificationEmail(user, token) {
   });
 }
 const passwordMatches = (password, encoded) => {
-  if (encoded.startsWith('pbkdf2_sha256$')) { const [, rounds, salt, expected] = encoded.split('$'); const actual = crypto.pbkdf2Sync(password, salt, Number(rounds), 32, 'sha256').toString('base64'); return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected)); }
+  if (typeof encoded !== 'string') return false;
+  if (encoded.startsWith('pbkdf2_sha256$')) { const [, rounds, salt, expected] = encoded.split('$'); const iterations = Number(rounds); if (!Number.isInteger(iterations) || iterations < 1 || iterations > 10000000 || !salt || !expected) return false; const actual = Buffer.from(crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('base64')); const candidate = Buffer.from(expected); return actual.length === candidate.length && crypto.timingSafeEqual(actual, candidate); }
   return bcrypt.compareSync(password, encoded);
 };
 async function requireAuth(req, res, next) {
   try {
-    await processAutoReturns();
     if (!req.session.userId) return res.status(401).json({ error: 'Authentication required.' });
     req.user = await getUser(req.session.userId);
     if (!req.user?.is_active) { req.session.destroy(() => {}); return res.status(401).json({ error: 'This account is no longer active.' }); }
@@ -163,7 +163,10 @@ async function reservationJson(row) {
 async function notify(user_id, type, title, message, fields = {}) {
   const existing = await many('notifications', db.from('notifications').select('id').eq('user_id', user_id).eq('type', type)
     .is('borrow_record_id', fields.borrow_record_id || null).is('reservation_id', fields.reservation_id || null).is('book_id', fields.book_id || null).limit(1));
-  if (!existing.length) fail((await db.from('notifications').insert({ user_id, type, title, message, ...fields })).error);
+  if (!existing.length) {
+    const { error } = await db.from('notifications').insert({ user_id, type, title, message, ...fields });
+    if (error && error.code !== '23505') fail(error);
+  }
 }
 async function notifyAdmins(type, title, message, fields = {}) {
   const admins = await many('users', db.from('users').select('id').eq('role', 'admin').eq('is_active', true));
@@ -202,12 +205,7 @@ async function processAutoReturns() {
   for (const row of rows) {
     const returned = await one('borrow_records', db.from('borrow_records').update({ return_date: addDays(row.borrow_date, 14), status: 'returned' }).eq('id', row.id).in('status', ['borrowed','overdue']).select().maybeSingle());
     if (!returned) continue;
-    if (row.book_format === 'physical') {
-      const book = await getBook(row.book_id);
-      if (book) fail((await db.from('books').update({ available_copies: Math.min(book.quantity, book.available_copies + 1) }).eq('id', book.id)).error);
-      await promoteReservation(row.book_id);
-    }
-    fail((await db.from('users').update({ is_active: false }).eq('id', row.user_id).eq('role', 'user')).error);
+    await writeAudit({}, 'virtual_loan_auto_returned', 'borrow_record', row.id, { member_id: row.user_id, book_id: row.book_id });
   }
 }
 
@@ -230,7 +228,7 @@ app.use((req, res, next) => {
   if (!expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return res.status(403).json({ error: 'Your security token expired. Refresh the page and try again.' });
   next();
 });
-app.get('/api/session/', endpoint(async (req, res) => { await processAutoReturns(); req.session.csrfToken ||= newCsrfToken(); const user = req.session.userId ? await getUser(req.session.userId) : null; if (user && (!user.is_active || (user.role === 'admin' && !req.session.adminMfaVerified))) req.session.destroy(() => {}); res.json({ csrfToken: req.session.csrfToken, user: user?.is_active && (user.role !== 'admin' || req.session.adminMfaVerified) ? safeUser(user) : null }); }));
+app.get('/api/session/', endpoint(async (req, res) => { req.session.csrfToken ||= newCsrfToken(); const user = req.session.userId ? await getUser(req.session.userId) : null; if (user && (!user.is_active || (user.role === 'admin' && !req.session.adminMfaVerified))) req.session.destroy(() => {}); res.json({ csrfToken: req.session.csrfToken, user: user?.is_active && (user.role !== 'admin' || req.session.adminMfaVerified) ? safeUser(user) : null }); }));
 if (process.env.NODE_ENV !== 'production') app.get('/api/network-address/', (_req, res) => { const ips = Object.values(os.networkInterfaces()).flatMap((x) => x || []).filter((x) => x.family === 'IPv4' && !x.internal).map((x) => x.address); res.json({ address: ips[0] || null }); });
 app.post('/api/newsletter/subscribe/', newsletterLimiter, endpoint(async (req, res) => { const email = String(req.body.email || '').trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' }); const { error } = await db.from('newsletter_subscriptions').upsert({ email }, { onConflict: 'email', ignoreDuplicates: true }); fail(error); res.status(201).json({ message: 'You are subscribed to library updates.' }); }));
 async function completeAdminLogin(req, res, user) {
@@ -373,6 +371,7 @@ app.get('/api/admin/reports/download/', requireAuth, requireRole('admin'), endpo
 const buildDir = path.join(__dirname, '..', 'static', 'react');
 app.use('/static/react', express.static(buildDir));
 app.use(express.static(buildDir));
+app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
 app.use((req, res) => res.sendFile(path.join(buildDir, 'index.html')));
 app.use((error, _req, res, _next) => {
   console.error('Unhandled API error:', error);
