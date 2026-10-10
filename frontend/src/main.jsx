@@ -4,12 +4,48 @@ import { QRCodeSVG } from 'qrcode.react';
 import libraryBooks from './library-books.svg';
 import './styles.css';
 
+const ReaderPdfDocument = React.lazy(() => import('./ReaderPdfDocument.jsx'));
+
 const emptyBook = {
   title: '',
   author: '',
   isbn: '',
   category: '',
+  description: '',
+  publication_year: '',
+  publisher: '',
+  language: '',
+  tags: [],
+  is_featured: false,
+  status: 'draft',
+  category_id: '',
+  author_id: '',
 };
+
+async function resizeBookCover(file) {
+  const image = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement('canvas');
+    const scale = Math.min(1, 1400 / Math.max(image.width, image.height));
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    const type = file.type === 'image/png' ? 'image/webp' : file.type;
+    let quality = 0.86;
+    let blob;
+    do {
+      blob = await new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+      if (!blob || blob.size <= 1024 * 1024 || quality <= 0.5) break;
+      quality -= 0.12;
+    } while (quality > 0.38);
+    if (!blob) throw new Error('Could not resize this cover image. Choose another image and try again.');
+    const outputType = blob.type || type;
+    const extension = outputType === 'image/webp' ? 'webp' : outputType === 'image/png' ? 'png' : 'jpg';
+    return new File([blob], `cover.${extension}`, { type: outputType });
+  } finally {
+    image.close();
+  }
+}
 
 const categoryImages = {
   adventure: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=700&q=80',
@@ -28,6 +64,7 @@ const categoryImages = {
 };
 
 function getBookImage(book) {
+  if (book.cover_url) return book.cover_url;
   return categoryImages[book.category?.toLowerCase()] || 'https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=700&q=80';
 }
 
@@ -160,7 +197,15 @@ function App() {
     get: (path) => request(path),
     post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body || {}) }, csrfToken),
     put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body || {}) }, csrfToken),
-    upload: (path, file) => request(path, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file }, csrfToken),
+    patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body || {}) }, csrfToken),
+    upload: (path, file, onProgress = () => {}) => new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest(); xhr.open('PUT', path); xhr.withCredentials = true; xhr.setRequestHeader('Content-Type', file.type);
+      if (csrfToken) xhr.setRequestHeader('X-CSRFToken', csrfToken);
+      xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
+      xhr.onerror = () => reject(new Error('Could not upload the selected file. Check your connection and try again.'));
+      xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if (xhr.status < 200 || xhr.status >= 300) reject(new Error(data.error || 'File upload failed.')); else resolve(data); };
+      xhr.send(file);
+    }),
     delete: (path) => request(path, { method: 'DELETE' }, csrfToken),
   }), [csrfToken]);
 
@@ -438,6 +483,8 @@ function EntryScreen({ setAuthScreen }) {
 
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
+  const [resendMode, setResendMode] = useState(false);
+  const [resendAccount, setResendAccount] = useState({ username: '', email: '' });
   const [mfaStep, setMfaStep] = useState('credentials');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaUrl, setMfaUrl] = useState('');
@@ -445,6 +492,12 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
   async function submit(event) {
     event.preventDefault();
     try {
+      if (resendMode) {
+        const result = await api.post('/api/email/resend-confirmation/', resendAccount);
+        showMessage(result.message);
+        setResendMode(false);
+        return;
+      }
       let data;
       if (mode === 'login' && role === 'admin' && mfaStep !== 'credentials') {
         const endpoint = mfaStep === 'setup' ? '/api/admin/mfa/confirm-setup/' : '/api/admin/mfa/verify/';
@@ -483,8 +536,14 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       </div>
       <form className="panel auth-form" onSubmit={submit}>
         <h3>{mfaStep === 'setup' ? 'Set up authenticator' : mfaStep === 'challenge' ? 'Admin verification' : mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
-        {!mfaFlow ? <>
-          <label>Username<input autoComplete="username" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
+        {!mfaFlow ? resendMode ? <>
+          <p>If you already created an account but couldn’t confirm it, enter the same username and email address to request a fresh link.</p>
+          <label>Username<input autoComplete="username" value={resendAccount.username} onChange={(event) => setResendAccount({ ...resendAccount, username: event.target.value })} required /></label>
+          <label>Email<input type="email" autoComplete="email" value={resendAccount.email} onChange={(event) => setResendAccount({ ...resendAccount, email: event.target.value })} required /></label>
+          <button className="primary" type="submit">Send confirmation email</button>
+          <p className="auth-switch"><button type="button" onClick={() => setResendMode(false)}>Return to sign in</button></p>
+        </> : <>
+          <label>Username<input autoComplete="username" placeholder={mode === 'login' ? 'Enter the username used at registration' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
           {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
           <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
           <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>
@@ -493,7 +552,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
           <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required /></label>
           <button className="primary" type="submit">{mfaStep === 'setup' ? 'Enable and sign in' : 'Verify and sign in'}</button>
         </>}
-        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
+        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' && !resendMode ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch"><button type="button" onClick={() => { setResendAccount({ username: form.username, email: '' }); setResendMode(true); }}>Resend confirmation email</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
       </form>
     </section>
   );
@@ -558,13 +617,13 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
 
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['users', 'Members'], ['reports', 'Reports'], ['account', 'Account']]
-    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['account', 'Account']];
+    ? [['dashboard', 'Dashboard'], ['books', 'Books & Catalogue'], ['categories', 'Categories & Genres'], ['authors', 'Authors'], ['users', 'Readers'], ['reports', 'Analytics & Reports'], ['audit', 'Audit Logs'], ['storage', 'Storage Health'], ['settings', 'System Settings'], ['security', 'Admin Security']]
+    : [['dashboard', 'Home'], ['books', 'Explore Library'], ['categories', 'Categories'], ['authors', 'Authors'], ['favourites', 'My Favourites'], ['history', 'Recently Read'], ['recommendations', 'Recommendations'], ['account', 'Account Settings']];
 
   return (
     <nav className="tabs">
       {items.map(([id, label]) => (
-        <button key={id} type="button" className={view === id ? 'active' : ''} onClick={() => setView(id)}>
+        <button key={id} type="button" className={view === id || (id === 'books' && (view.startsWith('search:') || /^category-\d+$/.test(view) || /^author-\d+$/.test(view))) ? 'active' : ''} onClick={() => setView(id)}>
           {label}
         </button>
       ))}
@@ -574,11 +633,18 @@ function Nav({ role, view, setView }) {
 
 function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, onDeactivated }) {
   if (view === 'dashboard') {
-    return <UserDashboard setView={setView} />;
+    return <UserDashboard api={api} setView={setView} showMessage={showMessage} />;
   }
   if (view === 'recommendations') {
     return <Recommendations api={api} showMessage={showMessage} />;
   }
+  if (view === 'categories') return <CategoryBrowser api={api} setView={setView} showMessage={showMessage} />;
+  if (view === 'authors') return <AuthorBrowser api={api} setView={setView} showMessage={showMessage} />;
+  if (view === 'favourites') return <ReaderLibraryList api={api} kind="favourites" showMessage={showMessage} />;
+  if (view === 'history') return <ReaderLibraryList api={api} kind="history" showMessage={showMessage} />;
+  if (/^category-\d+$/.test(view)) return <BookBrowser key={view} api={api} canRead showMessage={showMessage} categoryId={view.slice(9)} />;
+  if (/^author-\d+$/.test(view)) return <BookBrowser key={view} api={api} canRead showMessage={showMessage} authorId={view.slice(7)} />;
+  if (view.startsWith('search:')) return <BookBrowser key={view} api={api} canRead showMessage={showMessage} initialQuery={decodeURIComponent(view.slice(7))} />;
   if (view === 'account') {
     return <AccountSettings api={api} user={user} onUserChange={onUserChange} onDeactivated={onDeactivated} showMessage={showMessage} />;
   }
@@ -619,43 +685,86 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
   if (view === 'books') {
     return <BookManager api={api} showMessage={showMessage} />;
   }
+  if (view === 'categories' || view === 'authors') {
+    return <AdminEntityManager api={api} kind={view} showMessage={showMessage} />;
+  }
   if (view === 'users') {
     return <UserManager users={summary.users} api={api} reload={loadSummary} showMessage={showMessage} />;
   }
   if (view === 'account') {
     return <AccountSettings api={api} user={user} onUserChange={onUserChange} showMessage={showMessage} />;
   }
+  if (view === 'security') return <AdminSecurity api={api} user={user} setView={setView} showMessage={showMessage} />;
+  if (view === 'audit') return <AuditLogViewer api={api} showMessage={showMessage} />;
+  if (view === 'storage') return <StorageHealth api={api} showMessage={showMessage} />;
+  if (view === 'settings') return <SystemSettings api={api} showMessage={showMessage} />;
   if (view === 'reports') {
-    return (
-      <section className="panel report-panel">
-        <div className="report-heading">
-          <div>
-            <h2>Library Administration Report</h2>
-            <p>Digital catalogue and successful login activity.</p>
-          </div>
-          <div className="report-actions">
-            <button type="button" className="secondary" onClick={() => { window.location.href = '/api/admin/reports/download/'; }}>Download CSV</button>
-            <button type="button" className="primary" onClick={() => window.print()}>Print Report</button>
-          </div>
-        </div>
-        <div className="stats-grid compact">
-          <Stat label="Books in catalogue" value={summary.stats.total_books} />
-          <Stat label="Readable books" value={summary.stats.readable_books} />
-        </div>
-        <ReportTable title="Digital Books" columns={['Title', 'Author', 'ISBN', 'Category', 'Readable']} rows={summary.books.map((book) => [book.title, book.author, book.isbn, book.category, book.has_virtual_version ? 'Yes' : 'No'])} emptyText="No books in catalogue." />
-        <ReportTable title="Successful Login History" columns={['Username', 'Email', 'Role', 'Logged in at']} rows={summary.login_activities.map((activity) => [
-          activity.user.username, activity.user.email || 'No email', activity.user.role === 'user' ? 'Member' : 'Admin',
-          new Date(activity.logged_in_at).toLocaleString(),
-        ])} emptyText="Login history will appear after members sign in." />
-      </section>
-    );
+    return <AdminAnalytics api={api} summary={summary} showMessage={showMessage} />;
   }
   return null;
 }
 
-function UserManager({ users, api, reload, showMessage }) {
+function AdminEntityManager({ api, kind, showMessage }) {
+  const isCategory = kind === 'categories', endpoint = isCategory ? 'categories' : 'authors';
+  const [items,setItems]=useState([]),[query,setQuery]=useState(''),[editing,setEditing]=useState(null),[busy,setBusy]=useState(false);
+  const blank = isCategory ? {name:'',description:'',is_active:true} : {name:'',biography:''};
+  const load=useCallback(()=>api.get(`/api/admin/${endpoint}/`).then((data)=>setItems(data[endpoint])),[api,endpoint]);
+  useEffect(()=>{load().catch((error)=>showMessage(error.message));},[load,showMessage]);
+  async function save(event){event.preventDefault();setBusy(true);try{if(editing?.id)await api.put(`/api/admin/${endpoint}/${editing.id}/`,editing);else await api.post(`/api/admin/${endpoint}/`,editing||blank);setEditing(null);await load();showMessage(`${isCategory?'Category':'Author'} saved.`);}catch(error){showMessage(error.message);}finally{setBusy(false);}}
+  const filtered=items.filter((item)=>`${item.name} ${item.description||item.biography||''}`.toLowerCase().includes(query.toLowerCase()));
+  return <section className="panel admin-section"><div className="section-heading"><div><p className="eyebrow">Catalogue organization</p><h2>{isCategory?'Categories and genres':'Author management'}</h2><p>{isCategory?'Group books by subject and archive unused categories safely.':'Manage author records and see the books associated with each author.'}</p></div></div>
+    <div className="admin-two-column"><form className="form-grid entity-form" onSubmit={save}><h3>{editing?.id?'Edit':'Add'} {isCategory?'category':'author'}</h3><label>Name<input required maxLength="120" value={(editing||blank).name} onChange={(e)=>setEditing({...editing||blank,name:e.target.value})}/></label><label>{isCategory?'Description':'Biography'}<textarea rows="4" value={(editing||blank)[isCategory?'description':'biography']} onChange={(e)=>setEditing({...editing||blank,[isCategory?'description':'biography']:e.target.value})}/></label>{isCategory&&editing?.id&&<label className="check-label"><input type="checkbox" checked={editing.is_active} onChange={(e)=>setEditing({...editing,is_active:e.target.checked})}/> Active category</label>}<div className="button-row"><button className="primary" disabled={busy}>{busy?'Saving...':'Save'}</button>{editing&&<button type="button" className="secondary" onClick={()=>setEditing(null)}>Cancel</button>}</div></form>
+      <div className="entity-list"><div className="section-heading compact-heading"><h3>{isCategory?'All categories':'All authors'}</h3><span>{filtered.length} shown</span></div><label className="search-label">Search<input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder={`Search ${endpoint}`}/></label>{filtered.length?filtered.map((item)=><article className="entity-row" key={item.id}><div><strong>{item.name}</strong><small>{isCategory?item.description:item.biography}</small><span>{item.book_count} {item.book_count===1?'book':'books'}{isCategory&&!item.is_active?' · Archived':''}</span></div><button type="button" className="secondary" onClick={()=>setEditing(item)}>Edit</button></article>):<p className="empty-state">No matching {endpoint} yet.</p>}</div></div>
+  </section>;
+}
+
+function AdminAnalytics({api,summary,showMessage}){
+  const [days,setDays]=useState(30),[data,setData]=useState(null),[busy,setBusy]=useState(true);
+  const load=useCallback(()=>{setBusy(true);return api.get(`/api/admin/analytics/?days=${days}`).then(setData).catch((error)=>showMessage(error.message)).finally(()=>setBusy(false));},[api,days,showMessage]);
+  useEffect(()=>{load();},[load]);
+  const metrics=data;
+  return <section className="panel admin-section"><div className="section-heading section-heading-row"><div><p className="eyebrow">Reader activity</p><h2>Analytics and reports</h2><p>Real catalogue, account, and recorded book-open data. An open is not counted as a completed read.</p></div><div className="button-row"><label className="filter-label">Period<select value={days} onChange={(e)=>setDays(Number(e.target.value))}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label><a className="button-link secondary" href={`/api/admin/reports/analytics.csv?days=${days}`}>Download CSV</a></div></div>
+    {busy&&!metrics?<p className="loading-state">Loading analytics…</p>:metrics&&<><div className="analytics-stat-grid"><Stat label="Total book opens" value={metrics.activity.opens}/><Stat label="Unique readers" value={metrics.activity.unique_readers}/><Stat label="Reader registrations" value={metrics.readers.registrations}/><Stat label="Published books" value={metrics.books.published}/><Stat label="Active readers" value={metrics.readers.active_readers}/><Stat label="Tracked book storage" value={formatBytes(metrics.books.file_bytes)}/></div>
+      <div className="admin-two-column"><div className="data-card"><h3>Most opened books</h3>{metrics.most_read.length?metrics.most_read.map((book)=><div className="metric-row" key={book.id}><span>{book.title}</span><strong>{book.opens}</strong></div>):<p className="empty-state">No book opens have been recorded in this period.</p>}</div><div className="data-card"><h3>Popular categories</h3>{metrics.popular_categories.length?metrics.popular_categories.map((item)=><div className="metric-row" key={item.category}><span>{item.category}</span><strong>{item.opens}</strong></div>):<p className="empty-state">No category activity in this period.</p>}</div></div>
+      <div className="data-card"><h3>Book opens by day</h3>{metrics.daily.length?<div className="daily-activity">{metrics.daily.map((item)=><div key={item.day}><time>{new Date(`${item.day}T00:00:00`).toLocaleDateString(undefined,{month:'short',day:'numeric'})}</time><strong>{item.opens}</strong><small>{item.readers} readers</small></div>)}</div>:<p className="empty-state">No activity has been recorded in this period.</p>}</div>
+      <div className="data-card"><h3>Recent catalogue additions</h3>{summary.books.filter((book)=>book.created_at).slice(0,8).length?summary.books.filter((book)=>book.created_at).slice(0,8).map((book)=><div className="metric-row" key={book.id}><span>{book.title} · {book.author}</span><small>{new Date(book.created_at).toLocaleDateString()}</small></div>):<p className="empty-state">No recent book records.</p>}</div>
+      <div className="data-card"><h3>Content needing attention</h3><div className="metric-row"><span>Books without digital files</span><strong>{summary.books.filter((book)=>!book.has_virtual_version).length}</strong></div><div className="metric-row"><span>Missing covers</span><strong>{metrics.books.missing_cover}</strong></div><div className="metric-row"><span>Incomplete description or language</span><strong>{metrics.books.incomplete_metadata}</strong></div></div>
+    </>}{!busy&&metrics&&<button className="secondary" type="button" onClick={load}>Refresh report</button>}</section>;
+}
+function formatBytes(value){const size=Number(value)||0;if(size<1024)return `${size} B`;const units=['KB','MB','GB','TB'];let amount=size/1024,index=0;while(amount>=1024&&index<units.length-1){amount/=1024;index++;}return `${amount.toFixed(1)} ${units[index]}`;}
+
+function AuditLogViewer({api,showMessage}){
+  const [q,setQ]=useState(''),[event,setEvent]=useState(''),[page,setPage]=useState(0),[result,setResult]=useState({records:[],total:0}),[busy,setBusy]=useState(true);
+  const load=useCallback(()=>{setBusy(true);return api.get(`/api/admin/audit/?page=${page}&q=${encodeURIComponent(q)}&event=${encodeURIComponent(event)}`).then(setResult).catch((error)=>showMessage(error.message)).finally(()=>setBusy(false));},[api,page,q,event,showMessage]);useEffect(()=>{load();},[load]);
+  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Append-only administrator activity</p><h2>Audit logs</h2><p>Administrative actions are retained in Supabase and cannot be edited or deleted through this application.</p></div><form className="filter-bar" onSubmit={(e)=>{e.preventDefault();setPage(0);load();}}><label>Search event<input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="For example: book_updated"/></label><label>Action type<input value={event} onChange={(e)=>setEvent(e.target.value)} placeholder="Filter exact action type"/></label><button className="primary">Search</button></form>{busy?<p className="loading-state">Loading audit records…</p>:result.records.length?<div className="audit-list">{result.records.map((record)=><article key={record.id} className="audit-row"><div><strong>{record.event.replaceAll('_',' ')}</strong><span>{record.actor?.username||'System'} · {record.target_type||'system'} {record.target_id?`#${record.target_id}`:''}</span>{Object.keys(record.details||{}).length>0&&<small>{JSON.stringify(record.details)}</small>}</div><time>{new Date(record.created_at).toLocaleString()}</time></article>)}</div>:<p className="empty-state">No matching audit records.</p>}<div className="pagination"><span>{result.total} records</span><button className="secondary" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</button><span>Page {page+1}</span><button className="secondary" disabled={(page+1)*50>=result.total} onClick={()=>setPage(page+1)}>Next</button></div></section>;
+}
+
+function StorageHealth({api,showMessage}){
+  const [health,setHealth]=useState(null),[busy,setBusy]=useState(true),[checking,setChecking]=useState(null);
+  const load=useCallback(()=>{setBusy(true);return api.get('/api/admin/storage-health/').then(setHealth).catch((error)=>showMessage(error.message)).finally(()=>setBusy(false));},[api,showMessage]);useEffect(()=>{load();},[load]);
+  async function validate(book){setChecking(book.id);try{const result=await api.get(`/api/admin/books/${book.id}/validate/`);showMessage(result.valid?'Digital file opened successfully.':`Validation failed: ${Object.entries(result.checks).filter(([,ok])=>!ok).map(([key])=>key).join(', ')}`);await load();}catch(error){showMessage(error.message);}finally{setChecking(null);}}
+  return <section className="panel admin-section"><div className="section-heading section-heading-row"><div><p className="eyebrow">Private Supabase storage</p><h2>Storage and file health</h2><p>Storage figures come from the accessible first 1,000 objects in each private bucket. Missing file checks use recorded book references.</p></div><button className="secondary" onClick={load}>Refresh check</button></div>{busy?<p className="loading-state">Checking storage…</p>:health&&<><div className="analytics-stat-grid"><Stat label="Book files" value={`${health.book_bucket.objects} · ${formatBytes(health.book_bucket.bytes)}`}/><Stat label="Cover files" value={`${health.cover_bucket.objects} · ${formatBytes(health.cover_bucket.bytes)}`}/><Stat label="Book files without a record" value={health.book_bucket.orphaned.length}/><Stat label="Cover files without a record" value={health.cover_bucket.orphaned.length}/></div><div className="admin-two-column"><div className="data-card"><h3>Books without digital files</h3>{health.missing_books.length?health.missing_books.map(book=><div className="metric-row" key={book.id}><span>{book.title}</span><button className="secondary" disabled={checking===book.id} onClick={()=>validate(book)}>{checking===book.id?'Checking…':'Validate'}</button></div>):<p className="empty-state">Every non-archived book has a stored file reference.</p>}</div><div className="data-card"><h3>Books without covers</h3>{health.missing_covers.length?health.missing_covers.map(book=><div className="metric-row" key={book.id}><span>{book.title}</span><small>Optional cover</small></div>):<p className="empty-state">Every non-archived book has a cover.</p>}</div></div><div className="data-card"><h3>Unreferenced files</h3><p>Review these before removing anything. Cleanup is intentionally manual.</p><div className="admin-two-column"><div><strong>Book bucket</strong>{health.book_bucket.orphaned.map(name=><code className="file-key" key={name}>{name}</code>)}</div><div><strong>Cover bucket</strong>{health.cover_bucket.orphaned.map(name=><code className="file-key" key={name}>{name}</code>)}</div></div></div></>}</section>;
+}
+
+function SystemSettings({api,showMessage}){
+  const [branding,setBranding]=useState({name:'',contact_email:'',contact_phone:'',logo_url:''}),[catalogue,setCatalogue]=useState({registration_enabled:true,featured_book_ids:[]}),[books,setBooks]=useState([]),[busy,setBusy]=useState(true),[saving,setSaving]=useState(false);
+  const load=useCallback(()=>{setBusy(true);return Promise.all([api.get('/api/admin/settings/'),api.get('/api/books/?include_unreadable=1')]).then(([settings,result])=>{setBranding(settings.settings.branding||branding);setCatalogue(settings.settings.catalogue||catalogue);setBooks(result.books.filter(book=>book.status!=='archived'));}).catch((error)=>showMessage(error.message)).finally(()=>setBusy(false));},[api,showMessage]);useEffect(()=>{load();},[load]);
+  async function save(key,value){setSaving(true);try{const result=await api.put(`/api/admin/settings/${key}/`,{value});if(key==='branding')setBranding(result.value);else setCatalogue(result.value);showMessage('Library settings saved.');}catch(error){showMessage(error.message);}finally{setSaving(false);}}
+  function toggleFeatured(id){setCatalogue(current=>({...current,featured_book_ids:current.featured_book_ids.includes(id)?current.featured_book_ids.filter(x=>x!==id):[...current.featured_book_ids,id]}));}
+  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Reader-facing configuration</p><h2>System settings</h2><p>Only supported application settings are editable here. SMTP credentials and security keys remain in server environment settings.</p></div>{busy?<p className="loading-state">Loading settings…</p>:<><form className="form-grid settings-form" onSubmit={(e)=>{e.preventDefault();save('branding',branding);}}><h3>Library identity</h3><label>Library name<input maxLength="100" required value={branding.name} onChange={(e)=>setBranding({...branding,name:e.target.value})}/></label><label>Contact email<input type="email" value={branding.contact_email} onChange={(e)=>setBranding({...branding,contact_email:e.target.value})}/></label><label>Contact phone<input value={branding.contact_phone} onChange={(e)=>setBranding({...branding,contact_phone:e.target.value})}/></label><label>Logo URL (optional)<input type="url" value={branding.logo_url} onChange={(e)=>setBranding({...branding,logo_url:e.target.value})}/></label><button className="primary" disabled={saving}>Save identity</button></form><form className="form-grid settings-form" onSubmit={(e)=>{e.preventDefault();save('catalogue',catalogue);}}><h3>Reader access and homepage</h3><label className="check-label"><input type="checkbox" checked={catalogue.registration_enabled} onChange={(e)=>setCatalogue({...catalogue,registration_enabled:e.target.checked})}/> Allow new member registration</label><h4>Featured books</h4><p className="form-hint">Select up to 12 published books. Selected order is used on the member homepage.</p><div className="featured-settings">{books.filter(book=>book.status==='published'&&book.has_virtual_version).map(book=><label className="check-label" key={book.id}><input type="checkbox" checked={catalogue.featured_book_ids.includes(book.id)} disabled={!catalogue.featured_book_ids.includes(book.id)&&catalogue.featured_book_ids.length>=12} onChange={()=>toggleFeatured(book.id)}/>{book.title}</label>)}</div><button className="primary" disabled={saving}>Save catalogue settings</button></form><div className="data-card"><h3>Email and deployment configuration</h3><p>SMTP host, port, account, app password, session keys, MFA encryption key, and Supabase service-role key must be configured in the server environment on Render or your local .env file. They are never stored in this public settings form.</p></div></>}</section>;
+}
+
+function AdminSecurity({api,user,setView,showMessage}){
+  const [status,setStatus]=useState(null);useEffect(()=>{api.get('/api/admin/security/').then(setStatus).catch((error)=>showMessage(error.message));},[api,showMessage]);
+  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Administrator account</p><h2>Account and security</h2><p>Admin routes require server-side role checks and a verified authenticator challenge on each sign-in.</p></div><div className="analytics-stat-grid"><article className="stat"><span>Signed in as</span><strong>{user.username}</strong></article><article className="stat"><span>Two-factor authentication</span><strong>{status?status.mfa_enabled?'Enabled':'Setup required':'Checking…'}</strong></article><article className="stat"><span>Active administrators</span><strong>{status?.active_admins??'…'}</strong></article><article className="stat"><span>SMTP service</span><strong>{status?status.smtp_configured?'Configured':'Not configured':'Checking…'}</strong></article></div><div className="data-card"><h3>Security guidance</h3><ul><li>Use an authenticator app and keep recovery access to it secure.</li><li>Never share the server-only Supabase service-role key.</li><li>Use the password recovery flow to set a unique account password.</li><li>Account status and permissions are enforced by the server on every API request.</li></ul><button className="secondary" onClick={()=>setView('account')}>Manage admin profile</button></div></section>;
+}
+
+function UserManager({ api, reload, showMessage }) {
+  const [users,setUsers]=useState([]),[q,setQ]=useState(''),[status,setStatus]=useState('all'),[role,setRole]=useState('all'),[page,setPage]=useState(0),[total,setTotal]=useState(0),[busy,setBusy]=useState(true);
+  const load=useCallback(()=>{setBusy(true);const params=new URLSearchParams({page:String(page)});if(q)params.set('q',q);if(status!=='all')params.set('status',status);if(role!=='all')params.set('role',role);return api.get(`/api/admin/users/?${params}`).then(data=>{setUsers(data.users);setTotal(data.total);}).catch(error=>showMessage(error.message)).finally(()=>setBusy(false));},[api,page,q,status,role,showMessage]);useEffect(()=>{load();},[load]);
+  async function setAccount(item,changes){try{await api.patch(`/api/admin/users/${item.id}/`,changes);await load();await reload();showMessage('Reader account updated.');}catch(error){showMessage(error.message);}}
   async function removeUser(item) {
-    if (!window.confirm(`Remove ${item.username}? This permanently deletes their account and related library activity.`)) return;
+    if (!window.confirm(`Permanently delete ${item.username} and their account data? This cannot be undone. Deactivate the account instead if you only need to block sign-in.`)) return;
     try {
       await api.delete(`/api/admin/users/${item.id}/`);
       await reload();
@@ -663,14 +772,14 @@ function UserManager({ users, api, reload, showMessage }) {
     } catch (error) { showMessage(error.message); }
   }
   return <section className="panel user-manager">
-    <div className="section-heading"><div><p className="eyebrow">Member directory</p><h2>Members</h2><p>Removing a member permanently clears their account and connected library activity.</p></div></div>
-    <div className="table">
-      {users.map((item) => <div className="row user-row" key={item.id}>
-        <div><strong>{item.username}</strong><span>{item.email || 'No email'}</span></div>
-        <span className={`badge ${item.role !== 'admin' && !item.is_active ? 'danger-badge' : ''}`}>{item.role === 'admin' ? 'Admin' : item.is_active ? 'Active member' : 'Deactivated'}</span>
-        {item.role === 'user' ? <button type="button" className="danger" onClick={() => removeUser(item)}>Remove member</button> : <span className="admin-protected">Protected</span>}
-      </div>)}
-    </div>
+    <div className="section-heading"><div><p className="eyebrow">Reader directory</p><h2>Reader management</h2><p>Search accounts, review registration dates, and update access. Passwords are never displayed.</p></div></div>
+    <form className="filter-bar" onSubmit={(e)=>{e.preventDefault();setPage(0);load();}}><label>Search name or email<input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Username or email"/></label><label>Status<select value={status} onChange={(e)=>{setStatus(e.target.value);setPage(0);}}><option value="all">All statuses</option><option value="active">Active</option><option value="deactivated">Deactivated</option></select></label><label>Role<select value={role} onChange={(e)=>{setRole(e.target.value);setPage(0);}}><option value="all">All roles</option><option value="user">Readers</option><option value="admin">Admins</option></select></label><button className="primary">Search</button></form>
+    {busy?<p className="loading-state">Loading reader accounts…</p>:<div className="table">{users.length?users.map((item)=><div className="row user-row" key={item.id}>
+        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.email_verified?'Email confirmed':'Email not confirmed'}</small></div>
+        <span className={`badge ${!item.is_active?'danger-badge':''}`}>{item.role==='admin'?'Administrator':item.is_active?'Active reader':'Deactivated'}</span>
+        <div className="button-row">{item.role==='user'?<><button type="button" className="secondary" onClick={()=>setAccount(item,{is_active:!item.is_active})}>{item.is_active?'Deactivate':'Activate'}</button><button type="button" className="secondary" disabled={!item.email} onClick={async()=>{try{const result=await api.post(`/api/admin/users/${item.id}/recovery/`);showMessage(result.message);}catch(error){showMessage(error.message);}}}>Send recovery</button><button type="button" className="secondary" onClick={()=>{if(window.confirm(`Promote ${item.username} to administrator? They will need to set up two-factor authentication at their next login.`))setAccount(item,{role:'admin'});}}>Promote</button><button type="button" className="danger" onClick={()=>removeUser(item)}>Delete</button></>:<span className="admin-protected">Protected administrator</span>}</div>
+      </div>):<p className="empty-state">No accounts match these filters.</p>}</div>}
+    <div className="pagination"><span>{total} accounts</span><button className="secondary" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</button><span>Page {page+1}</span><button className="secondary" disabled={(page+1)*50>=total} onClick={()=>setPage(page+1)}>Next</button></div>
   </section>;
 }
 
@@ -740,25 +849,43 @@ function DashboardAction({ tone, title, text, action, onClick }) {
   );
 }
 
-function UserDashboard({ setView }) {
+function UserDashboard({ api, setView, showMessage }) {
+  const [homepage,setHomepage]=useState({featured:[],recent:[]}),[readerHome,setReaderHome]=useState({continue_reading:[],recently_read:[],popular:[]}),[readerBook,setReaderBook]=useState(null),[loading,setLoading]=useState(true),[loadError,setLoadError]=useState(''),[search,setSearch]=useState('');
+  const load=useCallback(()=>{setLoading(true);setLoadError('');Promise.all([api.get('/api/catalogue/homepage/'),api.get('/api/reader/home/')]).then(([catalogue,home])=>{setHomepage(catalogue);setReaderHome(home);}).catch(error=>{setLoadError(error.message);showMessage(error.message);}).finally(()=>setLoading(false));},[api,showMessage]);
+  useEffect(()=>{load();},[load]);
+  const continueBooks=readerHome.continue_reading.map(item=>({...item.book,resumePage:item.location?.page||1}));
+  const recentlyBooks=readerHome.recently_read.map(item=>({...item.book,lastOpened:item.last_opened_at}));
   return (
     <section className="dashboard">
       <div className="dashboard-intro">
         <div className="dashboard-intro-copy">
           <p className="eyebrow">Member Dashboard</p>
-          <h2>Welcome back to your library workspace.</h2>
-          <p>Browse the digital catalogue and read available books online.</p>
+          <h2>Welcome back. What would you like to read?</h2>
+          <p>Search the collection, pick up where you left off, or explore a popular title.</p>
+          <form className="home-search" onSubmit={event=>{event.preventDefault();const term=search.trim();setView(term?`search:${encodeURIComponent(term)}`:'books');}}><label className="sr-only" htmlFor="home-book-search">Search the library</label><input id="home-book-search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search titles, authors, subjects…"/><button type="submit" className="primary">Search</button></form>
         </div>
         <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
       </div>
       <div className="dashboard-grid">
-        <DashboardAction tone="blue" title="View Books" text="See all available books in the library." action="Open catalogue" onClick={() => setView('books')} />
-        <DashboardAction tone="cyan" title="Search Book" text="Search by title, author, category, or ISBN." action="Find a book" onClick={() => setView('books')} />
-        <DashboardAction tone="green" title="Recommended Books" text="Browse suggested books selected from available library titles." action="Explore picks" onClick={() => setView('recommendations')} />
+        <DashboardAction tone="blue" title="Explore the library" text="Search and filter published digital books." action="Browse books" onClick={() => setView('books')} />
+        <DashboardAction tone="cyan" title="My favourites" text="Return to books you have saved." action="Open favourites" onClick={() => setView('favourites')} />
+        <DashboardAction tone="green" title="Your categories" text="Explore the collection by subject." action="Browse categories" onClick={() => setView('categories')} />
       </div>
+      <div className="homepage-books">
+        <div className="section-heading section-heading-row"><div><p className="eyebrow">Picked for the library</p><h2>Featured books</h2></div><button type="button" className="secondary" onClick={()=>setView('books')}>Browse all books</button></div>
+        {loading?<p className="loading-state">Loading your library…</p>:loadError?<div className="empty-state"><p>We couldn’t load your library right now.</p><button type="button" className="secondary" onClick={load}>Try again</button></div>:homepage.featured.length?<BookShelf books={homepage.featured.slice(0,4)} onOpen={setReaderBook} onDetails={(book)=>setReaderBook(book)}/>:<p className="empty-state">No featured books yet. Explore the catalogue to discover available reading.</p>}
+        {continueBooks.length>0&&<ReaderShelf title="Continue reading" books={continueBooks} onOpen={setReaderBook} />}
+        {recentlyBooks.length>0&&<ReaderShelf title="Recently read" books={recentlyBooks} onOpen={setReaderBook} />}
+        {readerHome.popular.length>0?<ReaderShelf title="Popular this month" books={readerHome.popular} onOpen={setReaderBook} />:<div className="data-card"><h3>Popular books</h3><p className="empty-state">Reader activity will appear here as the collection is explored.</p></div>}
+        {homepage.recent.length>0&&<ReaderShelf title="Recently added" books={homepage.recent} onOpen={setReaderBook} />}
+      </div>
+      {readerBook&&<BookReader api={api} book={readerBook} onClose={()=>{setReaderBook(null);load();}} showMessage={showMessage}/>}
     </section>
   );
 }
+
+function BookShelf({books,onOpen}) { return <ReaderShelf title="Featured books" books={books} onOpen={onOpen}/>; }
+function ReaderShelf({title,books,onOpen}) { return <section className="reader-shelf"><div className="section-heading section-heading-row"><h3>{title}</h3></div><div className="book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>onOpen(book)} aria-label={`Open ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><h3>{book.title}</h3><p>{book.author}</p><span>{book.category||'Digital book'} · Read online</span>{book.resumePage&&<small>Last page: {book.resumePage}</small>}{book.lastOpened&&<small>Opened {new Date(book.lastOpened).toLocaleDateString()}</small>}</div><button type="button" className="primary" onClick={()=>onOpen(book)}>Read Book</button></article>)}</div></section>; }
 
 function AdminDashboard({ summary, setView }) {
   return (
@@ -774,16 +901,19 @@ function AdminDashboard({ summary, setView }) {
         </div>
         <div className="admin-stat-grid">
           <Stat label="Total books" value={summary.stats.total_books} />
-          <Stat label="Members" value={summary.stats.total_users} />
-          <Stat label="Readable books" value={summary.stats.readable_books} />
+          <Stat label="Published" value={summary.stats.published_books} />
+          <Stat label="Drafts" value={summary.stats.draft_books} />
+          <Stat label="Active readers" value={summary.stats.active_users} />
+          <Stat label="Deactivated readers" value={summary.stats.deactivated_users} />
+          <Stat label="Book opens · 30 days" value={summary.stats.total_opens} />
         </div>
       </div>
       <div className="dashboard-grid">
-        <DashboardAction tone="blue" title="Manage Books" text="Add, update, and delete books." action="Manage" onClick={() => setView('books')} />
-        <DashboardAction tone="cyan" title="Manage Members" text="View library members and administrators." action="View members" onClick={() => setView('users')} />
-        <DashboardAction tone="green" title="Manage Digital Books" text="Add or update online reading material." action="Manage catalogue" onClick={() => setView('books')} />
-        <DashboardAction tone="green" title="View Reports" text="Review members and library activity." action="Open reports" onClick={() => setView('reports')} />
+        <DashboardAction tone="blue" title="Books & catalogue" text="Add new titles, edit existing records, upload files, and manage publication." action="Open catalogue" onClick={() => setView('books')} />
+        <DashboardAction tone="green" title="Manage readers" text="Search, activate, deactivate, and recover accounts." action="Reader access" onClick={() => setView('users')} />
+        <DashboardAction tone="green" title="Review activity" text="See recorded opens, popular titles, and reports." action="Analytics" onClick={() => setView('reports')} />
       </div>
+      <div className="admin-two-column dashboard-lower"><div className="data-card"><div className="section-heading section-heading-row"><h3>Most opened</h3><button className="link-button" onClick={()=>setView('reports')}>View analytics</button></div>{summary.most_read.length?summary.most_read.slice(0,5).map(book=><div className="metric-row" key={book.id}><span>{book.title}</span><strong>{book.opens} opens</strong></div>):<p className="empty-state">Reader activity will appear after a book is opened.</p>}</div><div className="data-card"><div className="section-heading section-heading-row"><h3>Recent admin actions</h3><button className="link-button" onClick={()=>setView('audit')}>Open audit log</button></div>{summary.recent_actions.length?summary.recent_actions.slice(0,5).map(action=><div className="metric-row" key={action.id}><span>{action.actor?.username||'System'} · {action.event.replaceAll('_',' ')}</span><small>{new Date(action.created_at).toLocaleDateString()}</small></div>):<p className="empty-state">Administrative activity will be recorded here.</p>}</div></div>
     </section>
   );
 }
@@ -1106,173 +1236,107 @@ function Recommendations({ api, showMessage }) {
   );
 }
 
-function BookBrowser({ api, canRead, showMessage }) {
-  const [books, setBooks] = useState([]);
-  const [query, setQuery] = useState('');
-  const [readerBook, setReaderBook] = useState(null);
-
-  async function loadBooks(search = query) {
-    const data = await api.get(`/api/books/?q=${encodeURIComponent(search)}`);
-    setBooks(data.books);
-  }
-
-  useEffect(() => {
-    loadBooks('').catch((error) => showMessage(error.message));
-  }, []);
-
-  return (
-    <section className="books-page">
-      <div className="books-hero">
-        <div className="page-hero-copy">
-          <p className="eyebrow">Library Catalogue</p>
-          <h2>Find a book to read online.</h2>
-          <p>Search the digital catalogue and read available books inside your library account.</p>
-        </div>
-        <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
-      </div>
-      <div className="panel">
-      <div className="toolbar">
-        <h2>Books</h2>
-        <form onSubmit={(event) => { event.preventDefault(); loadBooks(); }}>
-          <input placeholder="Search title, author, ISBN, category" value={query} onChange={(event) => setQuery(event.target.value)} />
-          <button type="submit">Search</button>
-        </form>
-      </div>
-      <div className="book-grid">
-        {books.map((book) => (
-          <article className="book-card" key={book.id}>
-            <div className="book-3d"><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy" /></div>
-            <div>
-              <h3>{book.title}</h3>
-              <p>{book.author}</p>
-              <span>{book.category} - ISBN {book.isbn}</span>
-              <span className="format-badge virtual-badge">Read online</span>
-            </div>
-            <div className="book-actions">
-              {canRead && <button type="button" onClick={() => setReaderBook(book)}>Read Book</button>}
-            </div>
-          </article>
-        ))}
-      </div>
-      </div>
-      {readerBook && <BookReader api={api} book={readerBook} onClose={() => setReaderBook(null)} showMessage={showMessage} />}
-    </section>
-  );
+function BookBrowser({ api, canRead, showMessage, categoryId = '', authorId = '', initialQuery = '' }) {
+  const [books,setBooks]=useState([]),[categories,setCategories]=useState([]),[selectedCategory,setSelectedCategory]=useState(categoryId),[query,setQuery]=useState(initialQuery),[language,setLanguage]=useState(''),[yearMin,setYearMin]=useState(''),[yearMax,setYearMax]=useState(''),[sort,setSort]=useState('title'),[page,setPage]=useState(0),[total,setTotal]=useState(0),[pages,setPages]=useState(0),[busy,setBusy]=useState(true),[error,setError]=useState(''),[selected,setSelected]=useState(null),[readerBook,setReaderBook]=useState(null);
+  useEffect(()=>{api.get('/api/reader/categories/').then(data=>setCategories(data.categories)).catch(()=>{});},[api]);
+  const load=useCallback(async(nextPage=page)=>{setBusy(true);setError('');const params=new URLSearchParams({page:String(nextPage),sort});if(query.trim())params.set('q',query.trim());if(selectedCategory)params.set('category',selectedCategory);if(authorId)params.set('author',authorId);if(language.trim())params.set('language',language.trim());if(yearMin)params.set('year_min',yearMin);if(yearMax)params.set('year_max',yearMax);try{const data=await api.get(`/api/books/?${params}`);setBooks(data.books);setTotal(data.total);setPages(data.pages);setPage(data.page);}catch(err){setError(err.message);showMessage(err.message);}finally{setBusy(false);}},[api,page,sort,query,selectedCategory,authorId,language,yearMin,yearMax,showMessage]);
+  useEffect(()=>{const timer=window.setTimeout(()=>load(page),query?250:0);return()=>window.clearTimeout(timer);},[load,page,query]);
+  function clearFilters(){setQuery('');setSelectedCategory('');setLanguage('');setYearMin('');setYearMax('');setSort('title');setPage(0);}
+  return <section className="books-page">
+    <div className="books-hero"><div className="page-hero-copy"><p className="eyebrow">Explore Library</p><h2>Find a book to read online.</h2><p>Search and filter the published digital collection.</p></div><img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books"/></div>
+    <form className="panel catalogue-filters" onSubmit={event=>{event.preventDefault();setPage(0);}}><label>Search books<input aria-label="Search books" placeholder="Title, author, subject, keywords" value={query} onChange={event=>{setQuery(event.target.value);setPage(0);}}/></label><label>Category<select value={selectedCategory} onChange={event=>{setSelectedCategory(event.target.value);setPage(0);}}><option value="">All categories</option>{categories.map(item=><option key={item.id} value={item.id}>{item.name} ({item.book_count})</option>)}</select></label><label>Language<input placeholder="Any language" value={language} onChange={event=>{setLanguage(event.target.value);setPage(0);}}/></label><label>Year from<input type="number" min="1000" max="3000" value={yearMin} onChange={event=>{setYearMin(event.target.value);setPage(0);}}/></label><label>Year to<input type="number" min="1000" max="3000" value={yearMax} onChange={event=>{setYearMax(event.target.value);setPage(0);}}/></label><label>Sort by<select value={sort} onChange={event=>{setSort(event.target.value);setPage(0);}}><option value="title">Title</option><option value="author">Author</option><option value="newest">Newest</option><option value="popular">Popular</option></select></label><button className="primary" type="submit">Search</button><button type="button" className="secondary" onClick={clearFilters}>Clear filters</button></form>
+    <div className="section-heading section-heading-row"><h2>{authorId?'Books by selected author':selectedCategory?categories.find(item=>String(item.id)===String(selectedCategory))?.name||'Category':'Books'}</h2><span>{total} published books</span></div>
+    {busy?<p className="loading-state">Loading books…</p>:error?<div className="empty-state"><p>We couldn’t load the catalogue.</p><button className="secondary" onClick={()=>load(page)}>Try again</button></div>:books.length?<><div className="book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>setSelected(book)} aria-label={`View ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><button className="book-title-link" type="button" onClick={()=>setSelected(book)}><h3>{book.title}</h3></button><p>{book.author}</p>{book.category&&<span>{book.category}</span>}{book.publication_year&&<small>{book.publication_year}</small>}<span className="format-badge virtual-badge">{book.virtual_file_type==='application/pdf'?'PDF':'Text'} · Read online</span></div><div className="book-actions"><button type="button" className="secondary" onClick={()=>setSelected(book)}>Details</button>{canRead&&<button type="button" className="primary" onClick={()=>setReaderBook(book)}>Read</button>}</div></article>)}</div><div className="pagination"><span>Page {page+1} of {Math.max(1,pages)}</span><button className="secondary" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</button><button className="secondary" disabled={page+1>=pages} onClick={()=>setPage(page+1)}>Next</button></div></>:<p className="empty-state">No published books match these filters. Clear a filter or try another search.</p>}
+    {selected&&<BookDetails api={api} book={selected} books={books} onRead={book=>{setSelected(null);setReaderBook(book);}} onClose={()=>setSelected(null)} showMessage={showMessage}/>}
+    {readerBook&&<BookReader api={api} book={readerBook} onClose={()=>{setReaderBook(null);load(page);}} showMessage={showMessage}/>}
+  </section>;
 }
 
-function BookReader({ api, book, onClose, showMessage }) {
-  const [text, setText] = useState('');
-  const [page, setPage] = useState(0);
-  const [zoom, setZoom] = useState(1);
-  const isPdf = book.virtual_file_type === 'application/pdf';
-  const pages = isPdf ? [] : (text.match(/[\s\S]{1,3200}/g) || ['']);
-
-  useEffect(() => {
-    if (isPdf) return;
-    api.get('/api/books/' + book.id + '/read/')
-      .then((data) => setText(data.text))
-      .catch((error) => showMessage(error.message));
-  }, [api, book.id, isPdf, showMessage]);
-
-  const pdfSource = '/api/books/' + book.id + '/content/#toolbar=0&page=' + (page + 1) + '&zoom=' + Math.round(zoom * 100);
-  return (
-    <section className="panel book-reader">
-      <div className="reader-header">
-        <div><p className="eyebrow">Read Online</p><h2>{book.title}</h2><p>{book.author}</p></div>
-        <button type="button" className="secondary" onClick={onClose}>Back to Catalogue</button>
-      </div>
-      <div className="reader-toolbar">
-        <button type="button" className="secondary" disabled={page <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous Page</button>
-        <span>{isPdf ? 'Page ' + (page + 1) : 'Page ' + (Math.min(page + 1, pages.length || 1)) + ' of ' + (pages.length || 1)}</span>
-        <button type="button" className="secondary" disabled={!isPdf && page >= pages.length - 1} onClick={() => setPage((value) => value + 1)}>Next Page</button>
-        {isPdf && <>
-          <button type="button" className="secondary" aria-label="Zoom out" disabled={zoom <= .6} onClick={() => setZoom((value) => Math.max(.6, value - .1))}>−</button>
-          <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" className="secondary" onClick={() => setZoom((value) => Math.min(2, value + .1))}>+</button>
-        </>}
-        {!isPdf && <>
-          <button type="button" className="secondary" aria-label="Zoom out" disabled={zoom <= .6} onClick={() => setZoom((value) => Math.max(.6, value - .1))}>−</button>
-          <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" className="secondary" aria-label="Zoom in" disabled={zoom >= 2} onClick={() => setZoom((value) => Math.min(2, value + .1))}>+</button>
-        </>}
-      </div>
-      {isPdf
-        ? <iframe className="pdf-reader-frame" title={'Reading ' + book.title} src={pdfSource} />
-        : <article className="text-reader-page" style={{ fontSize: zoom + 'rem' }}>{text ? pages[page] : 'Loading book…'}</article>}
-      <div className="reader-footer">
-        <button type="button" className="secondary" onClick={onClose}>Close Reader</button>
-      </div>
-    </section>
-  );
+function CategoryBrowser({api,setView,showMessage}){
+  const [categories,setCategories]=useState([]),[busy,setBusy]=useState(true);
+  useEffect(()=>{api.get('/api/reader/categories/').then(data=>setCategories(data.categories)).catch(error=>showMessage(error.message)).finally(()=>setBusy(false));},[api,showMessage]);
+  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Explore by subject</p><h2>Categories</h2><p>Browse published digital books by category.</p></div>{busy?<p className="loading-state">Loading categories…</p>:categories.length?<div className="category-reader-grid">{categories.map(category=><button type="button" className="data-card category-reader-card" key={category.id} onClick={()=>setView(`category-${category.id}`)}><strong>{category.name}</strong><span>{category.book_count} {category.book_count===1?'book':'books'}</span>{category.description&&<small>{category.description}</small>}</button>)}</div>:<p className="empty-state">There are no categories in the published collection yet.</p>}</section>;
 }
 
-function BookManager({ api, showMessage }) {
-  const [editing, setEditing] = useState(emptyBook);
-  const [virtualFile, setVirtualFile] = useState(null);
-  const [booksKey, setBooksKey] = useState(0);
+function AuthorBrowser({api,setView,showMessage}){
+  const [authors,setAuthors]=useState([]),[busy,setBusy]=useState(true),[query,setQuery]=useState('');
+  useEffect(()=>{api.get('/api/reader/authors/').then(data=>setAuthors(data.authors)).catch(error=>showMessage(error.message)).finally(()=>setBusy(false));},[api,showMessage]);
+  const shown=authors.filter(author=>author.name.toLowerCase().includes(query.toLowerCase()));
+  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Writers in the collection</p><h2>Authors</h2><p>Explore books by their recorded authors.</p></div><label className="author-search">Search authors<input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Author name"/></label>{busy?<p className="loading-state">Loading authors…</p>:shown.length?<div className="category-reader-grid">{shown.map(author=><button type="button" className="data-card category-reader-card" key={author.id} onClick={()=>setView(`author-${author.id}`)}><strong>{author.name}</strong><span>{author.book_count} {author.book_count===1?'published book':'published books'}</span>{author.biography&&<small>{author.biography}</small>}</button>)}</div>:<p className="empty-state">No authors match your search.</p>}</section>;
+}
 
-  async function saveBook(event) {
-    event.preventDefault();
-    try {
-      let saved;
-      if (editing.id) {
-        saved = await api.put(`/api/books/${editing.id}/`, editing);
-      } else {
-        saved = await api.post('/api/books/', editing);
-      }
-      setEditing(saved.book);
-      if (virtualFile) {
-        await api.upload(`/api/admin/books/${saved.book.id}/virtual-file/?filename=${encodeURIComponent(virtualFile.name)}`, virtualFile);
-      }
-      showMessage(virtualFile ? 'Digital book saved and ready to read.' : editing.id ? 'Book updated.' : 'Book details saved. Add a digital file to make it readable.');
-      setEditing(emptyBook);
-      setVirtualFile(null);
-      setBooksKey((key) => key + 1);
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
+function ReaderLibraryList({api,kind,showMessage}){
+  const [items,setItems]=useState([]),[busy,setBusy]=useState(true),[readerBook,setReaderBook]=useState(null),[clearing,setClearing]=useState(false);
+  const endpoint=kind==='favourites'?'/api/reader/favourites/':'/api/reader/history/';
+  const load=useCallback(()=>{setBusy(true);return api.get(endpoint).then(data=>setItems(kind==='favourites'?data.favourites:data.history)).catch(error=>showMessage(error.message)).finally(()=>setBusy(false));},[api,endpoint,kind,showMessage]);useEffect(()=>{load();},[load]);
+  async function remove(book){try{await api.delete(`/api/reader/books/${book.id}/favourite/`);await load();showMessage('Removed from favourites.');}catch(error){showMessage(error.message);}}
+  async function clearHistory(){if(!window.confirm('Clear your personal recently read list and reading activity? This also removes your open events from library analytics.'))return;setClearing(true);try{await api.delete('/api/reader/history/');setItems([]);showMessage('Your reading history was cleared.');}catch(error){showMessage(error.message);}finally{setClearing(false);}}
+  return <section className="panel admin-section"><div className="section-heading section-heading-row"><div><p className="eyebrow">Your library</p><h2>{kind==='favourites'?'My Favourites':'Recently Read'}</h2><p>{kind==='favourites'?'Books you have saved for later.':'Books you have opened recently, with your last saved page.'}</p></div>{kind==='history'&&<button className="danger" disabled={clearing||!items.length} onClick={clearHistory}>{clearing?'Clearing…':'Clear history'}</button>}</div>{busy?<p className="loading-state">Loading your {kind==='favourites'?'favourites':'reading history'}…</p>:items.length?<div className="reader-list">{items.map((item,index)=>item.book?<article className="reader-list-row" key={item.book.id}><img src={getBookImage(item.book)} alt=""/><div><strong>{item.book.title}</strong><span>{item.book.author}</span><small>{kind==='favourites'?`Saved ${new Date(item.created_at).toLocaleDateString()}`:`Last opened ${new Date(item.last_opened_at).toLocaleString()}${item.last_page?` · Page ${item.last_page}`:''}`}</small></div><button className="primary" onClick={()=>setReaderBook(item.book)}>Read</button>{kind==='favourites'&&<button className="secondary" onClick={()=>remove(item.book)}>Remove</button>}</article>:<article className="reader-list-row unavailable-row" key={`${kind}-unavailable-${index}`}><div><strong>This book is no longer available</strong><span>It may have been unpublished or archived by the library.</span></div>{kind==='favourites'&&<button className="secondary" onClick={async()=>{try{await api.delete(`/api/reader/books/${item.book_id}/favourite/`);await load();}catch(error){showMessage(error.message);}}}>Remove</button>}</article>)}</div>:<p className="empty-state">{kind==='favourites'?'You have not saved any favourites yet.':'Books you open will appear here.'}</p>}{readerBook&&<BookReader api={api} book={readerBook} onClose={()=>{setReaderBook(null);load();}} showMessage={showMessage}/>}</section>;
+}
 
-  async function removeVirtualVersion() {
-    try {
-      await api.delete(`/api/admin/books/${editing.id}/virtual-file/`);
-      setEditing({ ...editing, has_virtual_version: false, virtual_file_name: '' });
-      showMessage('Virtual book version removed.');
-      setBooksKey((key) => key + 1);
-    } catch (error) { showMessage(error.message); }
-  }
+function BookDetails({api,book,books,onRead,onClose,showMessage}){
+  const [state,setState]=useState(null),[related,setRelated]=useState([]),[busy,setBusy]=useState(true);
+  useEffect(()=>{Promise.all([api.get(`/api/reader/books/${book.id}/state/`),book.category_id?api.get(`/api/books/?category=${book.category_id}&limit=5`):Promise.resolve({books:[]})]).then(([readerState,relatedBooks])=>{setState(readerState);setRelated(relatedBooks.books.filter(item=>item.id!==book.id).slice(0,4));}).catch(error=>showMessage(error.message)).finally(()=>setBusy(false));},[api,book.id,book.category_id,showMessage]);
+  async function toggleFavourite(){try{if(state?.favourite){await api.delete(`/api/reader/books/${book.id}/favourite/`);setState({...state,favourite:false});showMessage('Removed from favourites.');}else{await api.post(`/api/reader/books/${book.id}/favourite/`);setState({...state,favourite:true});showMessage('Added to favourites.');}}catch(error){showMessage(error.message);}}
+  const metadata=[['Category',book.category],['Publication year',book.publication_year],['Publisher',book.publisher],['ISBN',book.isbn],['Language',book.language],['Format',book.virtual_file_type==='application/pdf'?'PDF':book.virtual_file_type==='text/plain'?'Text':null],['File size',book.file_size?formatBytes(book.file_size):null]];
+  return <div className="reader-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="panel book-details-modal" role="dialog" aria-modal="true" aria-labelledby="book-details-title"><button className="secondary modal-close" onClick={onClose}>Close</button><div className="book-details-layout"><img className="book-details-cover" src={getBookImage(book)} alt={`${book.title} cover`}/><div><p className="eyebrow">Book details</p><h2 id="book-details-title">{book.title}</h2><p className="book-detail-author">{book.author}</p>{book.description&&<p className="book-description">{book.description}</p>}<dl className="book-metadata">{metadata.filter(([,value])=>value!==null&&value!==undefined&&String(value).trim()!=='').map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{book.tags?.length>0&&<div className="tag-list">{book.tags.map(tag=><span key={tag}>{tag}</span>)}</div>}<div className="book-actions"><button className="primary" onClick={()=>onRead(book)}>Read Book</button><button className="secondary" disabled={busy||!state} onClick={toggleFavourite}>{state?.favourite?'♥ Saved':'♡ Add to favourites'}</button></div>{state?.progress&&<small>Continue from page {state.progress.page}.</small>}</div></div>{related.length>0&&<div className="related-books"><h3>Related books in {book.category}</h3>{related.map(item=><button key={item.id} onClick={()=>onRead(item)}>{item.title}<span>{item.author}</span></button>)}</div>}</section></div>;
+}
 
-  async function removeBook(book) {
-    try {
-      await api.delete(`/api/books/${book.id}/`);
-      showMessage('Book deleted.');
-      setBooksKey((key) => key + 1);
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
+function BookReader({api,book,onClose,showMessage}){
+  const [text,setText]=useState(''),[pdfData,setPdfData]=useState(null),[page,setPage]=useState(1),[pageCount,setPageCount]=useState(0),[zoom,setZoom]=useState(1),[fitMode,setFitMode]=useState('width'),[state,setState]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[theme,setTheme]=useState(()=>localStorage.getItem('reader-theme')||'light');const readerRef=React.useRef(null);const isPdf=book.virtual_file_type==='application/pdf',isText=book.virtual_file_type==='text/plain';const pages=isText?(text.match(/[\s\S]{1,3200}/g)||['']):[];
+  const onPdfPageCount=useCallback(count=>{setPageCount(count);setPage(current=>Math.min(Math.max(1,current),count));},[]);
+  useEffect(()=>{let active=true;setBusy(true);setError('');setPdfData(null);setPageCount(0);const content=isText?api.get(`/api/books/${book.id}/read/`):isPdf?fetch(`/api/books/${book.id}/content/`,{credentials:'include'}).then(async response=>{if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||'The stored PDF could not be opened.');}const blob=await response.blob();const signature=new Uint8Array(await blob.slice(0,5).arrayBuffer());if(String.fromCharCode(...signature)!=='%PDF-')throw new Error('The stored file is not a readable PDF.');const tail=await blob.slice(Math.max(0,blob.size-4096)).text();if(!tail.includes('%%EOF'))throw new Error('This PDF appears incomplete. Ask library staff to replace the file.');return {pdfData:new Uint8Array(await blob.arrayBuffer())};}):Promise.resolve(null);Promise.all([api.get(`/api/reader/books/${book.id}/state/`),content]).then(([readerState,file])=>{if(!active)return;setState(readerState);const savedPage=readerState.progress?.page||1;if(isText&&file){setText(file.text);setPage(Math.min(Math.max(1,Math.ceil(file.text.length/3200)||1),savedPage));}else setPage(savedPage);if(isPdf&&file?.pdfData)setPdfData(file.pdfData);return (isPdf||isText)?api.post(`/api/books/${book.id}/open/`):null;}).catch(err=>{if(active)setError(err.message);}).finally(()=>{if(active)setBusy(false);});return()=>{active=false;};},[api,book.id,isPdf,isText,refresh]);
+  useEffect(()=>{if(busy||error||!state)return;const timer=window.setTimeout(()=>api.put(`/api/reader/books/${book.id}/progress/`,{location:{page}}).catch(err=>showMessage(err.message)),650);return()=>window.clearTimeout(timer);},[api,book.id,page,busy,error,state,showMessage]);
+  useEffect(()=>{localStorage.setItem('reader-theme',theme);},[theme]);
+  useEffect(()=>{const handler=event=>{if(event.target instanceof HTMLElement&&['INPUT','TEXTAREA','SELECT','BUTTON'].includes(event.target.tagName))return;if(event.key==='ArrowRight')setPage(value=>value+1);if(event.key==='ArrowLeft')setPage(value=>Math.max(1,value-1));};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);},[]);
+  async function toggleFavourite(){try{if(state.favourite){await api.delete(`/api/reader/books/${book.id}/favourite/`);setState({...state,favourite:false});showMessage('Removed from favourites.');}else{await api.post(`/api/reader/books/${book.id}/favourite/`);setState({...state,favourite:true});showMessage('Added to favourites.');}}catch(err){showMessage(err.message);}}
+  async function addBookmark(){const name=window.prompt('Name this bookmark (optional):','');if(name===null)return;try{const result=await api.post(`/api/reader/books/${book.id}/bookmarks/`,{name,location:{page}});setState({...state,bookmarks:[result.bookmark,...(state.bookmarks||[])]});showMessage('Bookmark saved.');}catch(err){showMessage(err.message);}}
+  async function removeBookmark(id){try{await api.delete(`/api/reader/bookmarks/${id}/`);setState({...state,bookmarks:state.bookmarks.filter(item=>item.id!==id)});showMessage('Bookmark removed.');}catch(err){showMessage(err.message);}}
+  async function renameBookmark(mark){const name=window.prompt('Bookmark name:',mark.name||'');if(name===null)return;try{const result=await api.put(`/api/reader/bookmarks/${mark.id}/`,{name});setState({...state,bookmarks:state.bookmarks.map(item=>item.id===mark.id?result.bookmark:item)});showMessage('Bookmark updated.');}catch(err){showMessage(err.message);}}
+  return <div className={`reader-modal-backdrop reader-backdrop-${theme}`}><section ref={readerRef} className={`panel book-reader reader-theme-${theme}`} aria-label={`Reading ${book.title}`}><div className="reader-header"><div><p className="eyebrow">Read Online</p><h2>{book.title}</h2><p>{book.author}</p></div><div className="book-actions"><button type="button" className="secondary" onClick={toggleFavourite} disabled={!state}>{state?.favourite?'♥ Favourite':'♡ Favourite'}</button><button type="button" className="secondary" onClick={()=>setTheme(theme==='light'?'dark':'light')}>Use {theme==='light'?'dark':'light'} theme</button><button type="button" className="secondary" onClick={onClose}>Back to book</button></div></div>
+    {busy?<p className="loading-state">Opening your book…</p>:error?<div className="reader-error" role="alert"><h3>Unable to open this book</h3><p>{error}</p><button className="primary" onClick={()=>setRefresh(value=>value+1)}>Retry</button><button className="secondary" onClick={onClose}>Back to catalogue</button></div>:!isPdf&&!isText?<div className="reader-error"><h3>Unsupported file format</h3><p>This library currently supports PDF and plain text books. This file is marked as {book.virtual_file_type||'unknown format'}.</p></div>:<>
+      {isPdf?<><div className="reader-toolbar"><button type="button" className="secondary" disabled={page<=1} onClick={()=>setPage(value=>Math.max(1,value-1))}>Previous page</button><label className="reader-page-control">Page<input type="number" min="1" max={pageCount||undefined} value={page} onChange={event=>setPage(Math.min(pageCount||100000,Math.max(1,Number(event.target.value)||1)))}/><span>of {pageCount||'…'}</span></label><button type="button" className="secondary" disabled={pageCount>0&&page>=pageCount} onClick={()=>setPage(value=>Math.min(pageCount||100000,value+1))}>Next page</button><button type="button" className="secondary" onClick={()=>{setFitMode(null);setZoom(value=>Math.max(.5,Number((value-.1).toFixed(1))));}} aria-label="Zoom out">−</button><span>{fitMode?`Fit ${fitMode}`:`${Math.round(zoom*100)}%`}</span><button type="button" className="secondary" onClick={()=>{setFitMode(null);setZoom(value=>Math.min(3,Number((value+.1).toFixed(1))));}} aria-label="Zoom in">+</button><button type="button" className="secondary" onClick={()=>setFitMode('width')}>Fit width</button><button type="button" className="secondary" onClick={()=>setFitMode('page')}>Fit page</button><button type="button" className="secondary" onClick={()=>readerRef.current?.requestFullscreen?.()}>Full screen</button></div>{pdfData&&<React.Suspense fallback={<p className="loading-state">Starting the PDF reader…</p>}><ReaderPdfDocument bytes={pdfData} page={page} zoom={zoom} fitMode={fitMode} onPageCount={onPdfPageCount} onPageChange={setPage} onError={setError}/></React.Suspense>}</>:<><div className="reader-toolbar"><button type="button" className="secondary" disabled={page<=1} onClick={()=>setPage(value=>Math.max(1,value-1))}>Previous page</button><label className="reader-page-control">Page<input type="number" min="1" max={pages.length} value={page} onChange={event=>setPage(Math.min(pages.length||1,Math.max(1,Number(event.target.value)||1)))}/><span>of {Math.max(1,pages.length)}</span></label><button type="button" className="secondary" disabled={page>=pages.length} onClick={()=>setPage(value=>value+1)}>Next page</button><button type="button" className="secondary" onClick={()=>setZoom(value=>Math.max(.7,Number((value-.1).toFixed(1))))} aria-label="Zoom out">−</button><span>{Math.round(zoom*100)}%</span><button type="button" className="secondary" onClick={()=>setZoom(value=>Math.min(1.8,Number((value+.1).toFixed(1))))} aria-label="Zoom in">+</button><button type="button" className="secondary" onClick={()=>readerRef.current?.requestFullscreen?.()}>Full screen</button><button type="button" className="secondary" onClick={()=>setRefresh(value=>value+1)}>Reload book</button></div><article className="text-reader-page" style={{fontSize:`${zoom}rem`}}>{pages[page-1]||'This page has no text.'}</article></>}
+      <div className="reader-bookmarks"><div className="section-heading section-heading-row"><h3>Bookmarks</h3><button className="secondary" onClick={addBookmark}>Save this page</button></div>{state?.bookmarks?.length?state.bookmarks.map(mark=><div className="bookmark-row" key={mark.id}><button className="link-button" onClick={()=>setPage(mark.location.page)}>{mark.name||`Page ${mark.location.page}`}</button><span>Page {mark.location.page}</span><button className="link-button" onClick={()=>renameBookmark(mark)}>Rename</button><button className="link-button" onClick={()=>removeBookmark(mark.id)}>Remove</button></div>):<p className="empty-state">Save a page to find it again later.</p>}</div>
+    </>}
+    <div className="reader-footer"><small>Reading position saves automatically for your account.</small><button type="button" className="secondary" onClick={onClose}>Close Reader</button></div></section></div>;
+}
 
-  return (
-    <div className="split">
-      <form className="panel form-grid" onSubmit={saveBook}>
-        <h2>{editing.id ? 'Edit Book' : 'Add Book'}</h2>
-        {['title', 'author', 'isbn', 'category'].map((field) => (
-          <label key={field}>
-            {field.replace('_', ' ')}
-            <input value={editing[field]} onChange={(event) => setEditing({ ...editing, [field]: event.target.value })} required />
-          </label>
-        ))}
-        <label>
-          Digital book file (PDF or TXT)
-          <input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(event) => setVirtualFile(event.target.files?.[0] || null)} />
-        </label>
-        <p className="form-hint">PDF or plain text, up to 50 MB. Members can read the private file online while signed in. Downloads are disabled.</p>
-        {editing.id && editing.has_virtual_version && <div className="virtual-file-current"><span>Digital file: {editing.virtual_file_name}</span><button type="button" className="danger" onClick={removeVirtualVersion}>Remove digital file</button></div>}
-        <button className="primary" type="submit">Save digital book</button>
-      </form>
-      <ManagedBookList key={booksKey} api={api} onEdit={(book) => { setEditing(book); setVirtualFile(null); }} onDelete={removeBook} showMessage={showMessage} />
-    </div>
-  );
+function BookManager({ api, showMessage, startNew = false }) {
+  const [editing,setEditing]=useState({...emptyBook}),[virtualFile,setVirtualFile]=useState(null),[coverFile,setCoverFile]=useState(null),[booksKey,setBooksKey]=useState(0),[options,setOptions]=useState({categories:[],authors:[]}),[progress,setProgress]=useState(null),[preview,setPreview]=useState(false),[checking,setChecking]=useState(false),[saving,setSaving]=useState(false);
+  useEffect(()=>{Promise.all([api.get('/api/admin/categories/'),api.get('/api/admin/authors/')]).then(([categories,authors])=>setOptions({categories:categories.categories.filter(item=>item.is_active),authors:authors.authors})).catch(error=>showMessage(error.message));},[api,showMessage]);
+  useEffect(()=>{if(startNew)setEditing({...emptyBook});},[startNew]);
+
+  async function saveBook(event){event.preventDefault();if(saving)return;if(virtualFile&&(!['application/pdf','text/plain'].includes(virtualFile.type)||virtualFile.size>50*1024*1024))return showMessage('Select a PDF or TXT file smaller than 50 MB.');if(coverFile&&(!['image/jpeg','image/png','image/webp'].includes(coverFile.type)||coverFile.size>25*1024*1024))return showMessage('Select a JPEG, PNG, or WEBP cover smaller than 25 MB.');
+    setSaving(true);setProgress(virtualFile||coverFile?0:null);try{const tags=Array.isArray(editing.tags)?editing.tags:String(editing.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean);const payload={...editing,tags,status:virtualFile&&editing.status==='published'?'draft':editing.status};delete payload.id;delete payload.has_virtual_version;delete payload.has_cover;delete payload.cover_url;delete payload.virtual_file_name;delete payload.virtual_file_type;
+      let saved=editing.id?await api.put(`/api/books/${editing.id}/`,payload):await api.post('/api/books/',payload);let book=saved.book;
+      if(virtualFile){await api.upload(`/api/admin/books/${book.id}/virtual-file/?filename=${encodeURIComponent(virtualFile.name)}`,virtualFile,setProgress);book={...book,has_virtual_version:true,virtual_file_name:virtualFile.name};}
+      if(coverFile){const resizedCover=await resizeBookCover(coverFile);await api.upload(`/api/admin/books/${book.id}/cover/`,resizedCover);book={...book,has_cover:true,cover_url:`/api/books/${book.id}/cover/`};}
+      if(book.status!==editing.status){const publishPayload={...payload,status:editing.status};book=(await api.put(`/api/books/${book.id}/`,publishPayload)).book;}
+      showMessage(`${book.status==='published'?'Book published and ready for online reading':book.status==='archived'?'Book archived':'Book saved as a draft'}.`);setEditing({...emptyBook});setVirtualFile(null);setCoverFile(null);setProgress(null);setBooksKey(key=>key+1);
+    }catch(error){showMessage(error.message);}finally{setProgress(null);setSaving(false);}}
+
+  async function removeVirtualVersion(){if(!window.confirm('Remove this digital file? Readers will no longer be able to open the book until a new file is uploaded.'))return;try{const result=await api.delete(`/api/admin/books/${editing.id}/virtual-file/`);setEditing({...editing,...result.book});showMessage('Digital file removed.');setBooksKey(key=>key+1);}catch(error){showMessage(error.message);}}
+  async function archiveBook(book){const archiving=book.status!=='archived';if(!window.confirm(archiving?`Archive “${book.title}”? It will disappear from the reader catalogue, while its audit and reading records remain.`:`Restore “${book.title}” as a draft? It will stay hidden until published.`))return;try{await api.put(`/api/books/${book.id}/`,{...book,status:archiving?'archived':'draft'});showMessage(archiving?'Book archived.':'Book restored as a draft.');setBooksKey(key=>key+1);}catch(error){showMessage(error.message);}}
+  async function validateFile(){if(!editing.id)return;setChecking(true);try{const result=await api.get(`/api/admin/books/${editing.id}/validate/`);setEditing(result.book);showMessage(result.valid?'The digital book opened successfully and is validated.':`Validation failed: ${Object.entries(result.checks).filter(([,ok])=>!ok).map(([key])=>key).join(', ')}`);}catch(error){showMessage(error.message);}finally{setChecking(false);}}
+  const [featuredPreview,setFeaturedPreview]=useState(false);
+  return <div className="split admin-book-layout">
+    <form className="panel form-grid book-editor" onSubmit={saveBook}>
+      <div className="section-heading"><p className="eyebrow">Digital collection</p><h2>{editing.id?'Edit book':'Add new book'}</h2><p>Drafts are private. Publish after uploading and validating a readable file.</p></div>
+      <label>Book title<input maxLength="240" value={editing.title||''} onChange={e=>setEditing({...editing,title:e.target.value})} required/></label>
+      <label>Author or authors<small>Choose existing author records; create a new author from the Authors section.</small><select multiple size="4" value={(editing.author_ids||[]).map(String)} onChange={e=>{const ids=[...e.target.selectedOptions].map(option=>Number(option.value));const names=options.authors.filter(author=>ids.includes(author.id)).map(author=>author.name);setEditing({...editing,author_ids:ids,author_id:ids[0]||'',author:names.join(', ')});}}>{options.authors.map(author=><option key={author.id} value={author.id}>{author.name}</option>)}</select>{options.authors.length===0&&<input aria-label="Author name" placeholder="Author name" value={editing.author||''} onChange={e=>setEditing({...editing,author:e.target.value})} required/>}</label>
+      <div className="form-grid two-field-grid"><label>Category / genre<select value={editing.category_id||''} onChange={e=>{const item=options.categories.find(category=>String(category.id)===e.target.value);setEditing({...editing,category_id:e.target.value,category:item?.name||''});}}><option value="">Choose category</option>{options.categories.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Publication year<input type="number" min="1000" max={new Date().getFullYear()+1} value={editing.publication_year||''} onChange={e=>setEditing({...editing,publication_year:e.target.value})}/></label><label>ISBN (optional)<input value={editing.isbn||''} onChange={e=>setEditing({...editing,isbn:e.target.value})}/></label><label>Publisher<input value={editing.publisher||''} onChange={e=>setEditing({...editing,publisher:e.target.value})}/></label><label>Language<input value={editing.language||''} onChange={e=>setEditing({...editing,language:e.target.value})}/></label><label>Tags / keywords<input value={Array.isArray(editing.tags)?editing.tags.join(', '):editing.tags||''} onChange={e=>setEditing({...editing,tags:e.target.value})} placeholder="history, local, education"/></label></div>
+      <label>Description / summary<textarea rows="5" maxLength="6000" value={editing.description||''} onChange={e=>setEditing({...editing,description:e.target.value})}/></label>
+      <div className="form-grid two-field-grid"><label>Publication status<select value={editing.status||'draft'} onChange={e=>setEditing({...editing,status:e.target.value})}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label><label className="check-label"><input type="checkbox" checked={Boolean(editing.is_featured)} onChange={e=>setEditing({...editing,is_featured:e.target.checked})}/> Featured in catalogue</label></div>
+      <label>Digital book file (PDF or TXT)<input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={e=>setVirtualFile(e.target.files?.[0]||null)}/><small>Maximum 50 MB. Files are stored privately and streamed to signed-in readers.</small></label>
+      {virtualFile&&<div className="upload-progress"><span>{virtualFile.name} · {formatBytes(virtualFile.size)}</span><progress max="100" value={progress??0}/><small>{progress==null?'Ready to upload':`${progress}% uploaded`}</small></div>}
+      {editing.id&&editing.has_virtual_version&&<div className="virtual-file-current"><span>Digital file: {editing.virtual_file_name||'Stored file'} · {formatBytes(editing.file_size)}</span><div className="button-row"><button type="button" className="secondary" onClick={validateFile} disabled={checking}>{checking?'Checking…':'Validate file'}</button><button type="button" className="danger" onClick={removeVirtualVersion}>Remove file</button></div><small>{editing.validated_at?`Last validated ${new Date(editing.validated_at).toLocaleString()}`:'Not yet validated'}</small></div>}
+      <label>Cover image (JPEG, PNG, or WEBP)<input type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>setCoverFile(e.target.files?.[0]||null)}/><small>Optional. Images up to 25 MB are resized automatically before upload.</small></label>
+      {(coverFile||editing.cover_url)&&<img className="book-cover-preview" src={coverFile?URL.createObjectURL(coverFile):editing.cover_url} alt="Book cover preview"/>}
+      <div className="button-row"><button className="primary" type="submit" disabled={saving}>{saving?'Saving…':'Save book'}</button>{editing.id&&editing.has_virtual_version&&<button type="button" className="secondary" onClick={()=>setFeaturedPreview(true)}>Preview book</button>}{editing.id&&<button type="button" className="secondary" onClick={()=>{setEditing({...emptyBook});setVirtualFile(null);setCoverFile(null);}}>New book</button>}</div>
+    </form>
+    {!startNew&&<ManagedBookList key={booksKey} api={api} onEdit={book=>{setEditing({...emptyBook,...book,tags:(book.tags||[]).join(', ')});setVirtualFile(null);setCoverFile(null);}} onDelete={archiveBook} showMessage={showMessage}/>}
+    {featuredPreview&&<BookReader api={api} book={editing} onClose={()=>setFeaturedPreview(false)} showMessage={showMessage}/>}
+  </div>;
 }
 
 function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
@@ -1292,7 +1356,7 @@ function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
             <span>{book.author}</span>
             <span>{book.has_virtual_version ? 'Readable online' : 'No digital file'}</span>
             <button type="button" onClick={() => onEdit(book)}>Edit</button>
-            <button type="button" className="danger" onClick={() => onDelete(book)}>Delete</button>
+            <button type="button" className="danger" onClick={() => onDelete(book)}>{book.status==='archived'?'Restore':'Archive'}</button>
           </div>
         ))}
       </div>

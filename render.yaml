@@ -5,7 +5,7 @@ services:
     plan: starter
     buildCommand: npm ci && npm run build
     startCommand: npm start
-    healthCheckPath: /api/session/
+    healthCheckPath: /api/health/ready/
     envVars:
       - key: NODE_ENV
         value: production
@@ -25,3 +25,5 @@ services:
         sync: false
       - key: SUPABASE_BOOKS_BUCKET
         value: private-books
+      - key: SUPABASE_TIMEOUT_MS
+        value: "20000"

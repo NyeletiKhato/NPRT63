@@ -4,8 +4,12 @@
     "server": "node backend/server.js",
     "start": "node backend/server.js",
     "migrate-django-data": "node backend/migrate-django-data.js",
+    "test": "node --test",
     "build": "vite build --configLoader runner",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --configLoader runner"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
@@ -15,6 +19,7 @@
     "express": "^5.1.0",
     "express-session": "^1.18.1",
     "nodemailer": "^10.1.0",
+    "pdfjs-dist": "^6.4.299",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
