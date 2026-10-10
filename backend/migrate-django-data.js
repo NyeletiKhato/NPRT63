@@ -28,8 +28,6 @@ async function run() {
   const SQL = await initSqlJs({ locateFile: (file) => require.resolve(`sql.js/dist/${file}`) });
   source = new SQL.Database(new Uint8Array(fs.readFileSync(sourcePath)));
   const oldUsers = read('core_customuser');
-  const oldBooks = read('core_book');
-  const oldRecords = read('core_borrowrecord');
   const oldActivities = read('core_loginactivity');
 
   // This is a one-time data import. Refuse a repeat run so it cannot restore
@@ -39,20 +37,12 @@ async function run() {
   if (importedUsers.data?.length) throw new Error('Legacy users are already present in Supabase. Refusing to rerun the import and duplicate or restore records.');
 
   await upsert('users', oldUsers.map((u) => ({ username: u.username, email: (u.email || '').toLowerCase(), password_hash: u.password, role: u.role, is_active: u.is_active ?? true, email_verified: true, created_at: u.date_joined || new Date().toISOString() })), 'username');
-  await upsert('books', oldBooks.map((b) => ({ title: b.title, author: b.author, isbn: b.isbn, category: b.category, quantity: Math.max(b.quantity, b.available_copies), available_copies: Math.max(0, b.available_copies) })), 'isbn');
-
   const users = await supabase.from('users').select('id,username');
   if (users.error) throw users.error;
   const userIds = new Map(users.data.map((u) => [u.username, u.id]));
-  const books = await supabase.from('books').select('id,isbn');
-  if (books.error) throw books.error;
-  const bookIds = new Map(books.data.map((b) => [b.isbn, b.id]));
   const oldUserNames = new Map(oldUsers.map((u) => [u.id, u.username]));
-  const oldBookIsbns = new Map(oldBooks.map((b) => [b.id, b.isbn]));
-
-  await upsert('borrow_records', oldRecords.map((r) => ({ user_id: userIds.get(oldUserNames.get(r.user_id)), book_id: bookIds.get(oldBookIsbns.get(r.book_id)), borrow_date: String(r.borrow_date).slice(0, 10), due_date: String(r.due_date).slice(0, 10), return_date: r.return_date ? String(r.return_date).slice(0, 10) : null, status: r.status })).filter((r) => r.user_id && r.book_id), 'id');
   const loginRows = oldActivities.map((a) => ({ user_id: userIds.get(oldUserNames.get(a.user_id)), logged_in_at: a.logged_in_at })).filter((a) => a.user_id);
   for (const group of chunks(loginRows)) { const { error } = await supabase.from('login_activities').insert(group); if (error) throw error; }
-  console.log(`Imported ${oldUsers.length} members, ${oldBooks.length} books, ${oldRecords.length} loans, and ${loginRows.length} login events.`);
+  console.log(`Imported ${oldUsers.length} member accounts and ${loginRows.length} login events. Add digital books and upload their files from the admin catalogue.`);
 }
 run().catch((error) => { console.error('Supabase data import failed:', error.message); process.exitCode = 1; }).finally(() => source?.close());

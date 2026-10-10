@@ -9,8 +9,6 @@ const emptyBook = {
   author: '',
   isbn: '',
   category: '',
-  quantity: 1,
-  available_copies: 1,
 };
 
 const categoryImages = {
@@ -204,7 +202,6 @@ function App() {
         </div>
         {user && (
           <div className="session">
-            <NotificationBell api={api} openNotifications={() => navigateView('notifications')} />
             {user.profile_photo ? <img className="session-avatar" src={user.profile_photo} alt="Your profile" /> : <span className="session-avatar avatar-fallback" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>}
             <span>{user.username}</span>
             <button type="button" onClick={handleLogout}>Sign out</button>
@@ -379,7 +376,7 @@ function EntryScreen({ setAuthScreen }) {
         <button type="button" className="entry-card user-card" onClick={() => setAuthScreen('login-user')}>
           <span className="entry-card-label">For readers</span>
           <span className="entry-card-title"><span className="access-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 6C9 3.5 5.5 3 2.5 4v15c3.2-1.1 6.6-.5 9.5 2 2.9-2.5 6.3-3.1 9.5-2V4c-3-.9-6.5-.5-9.5 2ZM12 6v15" /></svg></span><strong>Welcome back</strong></span>
-          <small>Sign in to find books, manage loans, and pick up where you left off.</small>
+          <small>Sign in to find digital books and continue reading.</small>
         </button>
         <button type="button" className="entry-card signup-card" onClick={() => setAuthScreen('signup')}>
           <span className="entry-card-label">Start here</span>
@@ -399,7 +396,7 @@ function EntryScreen({ setAuthScreen }) {
       <section className="community-intro" aria-labelledby="community-intro-title">
         <p className="eyebrow">Our story</p>
         <h2 id="community-intro-title">A library built for Rustenburg</h2>
-        <p>This library was created for Rustenburg communities whose local libraries relied on manual systems to manage books and borrowing. It brings those services into one easier-to-use place, helping readers discover books, borrow and return them, and keep track of their loans.</p>
+        <p>This library was created for Rustenburg communities whose local libraries relied on manual systems to manage books. It brings digital reading into one easier-to-use place, helping readers discover books and read them online.</p>
       </section>
       <div className="community-sections">
         <section className="community-panel calendar-panel" aria-labelledby="calendar-title">
@@ -561,8 +558,8 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
 
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['borrowed', 'Borrowed'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['users', 'Members'], ['reports', 'Reports'], ['account', 'Account']]
-    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['my-books', 'My Books'], ['reservations', 'Reservations'], ['notifications', 'Notifications'], ['account', 'Account']];
+    ? [['dashboard', 'Dashboard'], ['books', 'Books'], ['users', 'Members'], ['reports', 'Reports'], ['account', 'Account']]
+    : [['dashboard', 'Dashboard'], ['books', 'Books'], ['recommendations', 'Recommendations'], ['account', 'Account']];
 
   return (
     <nav className="tabs">
@@ -579,22 +576,13 @@ function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, on
   if (view === 'dashboard') {
     return <UserDashboard setView={setView} />;
   }
-  if (view === 'my-books') {
-    return <BorrowedBooks api={api} showMessage={showMessage} />;
-  }
-  if (view === 'reservations') {
-    return <MyReservations api={api} showMessage={showMessage} />;
-  }
-  if (view === 'notifications') {
-    return <NotificationCenter api={api} showMessage={showMessage} role={user.role} />;
-  }
   if (view === 'recommendations') {
     return <Recommendations api={api} showMessage={showMessage} />;
   }
   if (view === 'account') {
     return <AccountSettings api={api} user={user} onUserChange={onUserChange} onDeactivated={onDeactivated} showMessage={showMessage} />;
   }
-  return <BookBrowser api={api} canBorrow showMessage={showMessage} />;
+  return <BookBrowser api={api} canRead showMessage={showMessage} />;
 }
 
 function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage }) {
@@ -631,15 +619,6 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
   if (view === 'books') {
     return <BookManager api={api} showMessage={showMessage} />;
   }
-  if (view === 'borrowed') {
-    return <RecordTable records={summary.records} api={api} reload={loadSummary} showMessage={showMessage} />;
-  }
-  if (view === 'reservations') {
-    return <ReservationTable reservations={summary.reservations} />;
-  }
-  if (view === 'notifications') {
-    return <NotificationCenter api={api} showMessage={showMessage} role={user.role} />;
-  }
   if (view === 'users') {
     return <UserManager users={summary.users} api={api} reload={loadSummary} showMessage={showMessage} />;
   }
@@ -652,7 +631,7 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
         <div className="report-heading">
           <div>
             <h2>Library Administration Report</h2>
-            <p>Catalogue holdings, borrowing, reservations, and successful login activity.</p>
+            <p>Digital catalogue and successful login activity.</p>
           </div>
           <div className="report-actions">
             <button type="button" className="secondary" onClick={() => { window.location.href = '/api/admin/reports/download/'; }}>Download CSV</button>
@@ -661,16 +640,9 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
         </div>
         <div className="stats-grid compact">
           <Stat label="Books in catalogue" value={summary.stats.total_books} />
-          <Stat label="Total copies" value={summary.stats.total_copies} />
-          <Stat label="Borrowed (all time)" value={summary.report_stats.total_borrowed} />
-          <Stat label="Active reservations" value={summary.stats.active_reservations} />
+          <Stat label="Readable books" value={summary.stats.readable_books} />
         </div>
-        <ReportTable title="Borrowing Records" columns={['Borrower', 'Book', 'Borrowed', 'Due', 'Status']} rows={summary.records.map((record) => [
-          record.user.username, record.book.title, record.borrow_date, record.due_date, record.status,
-        ])} emptyText="No borrowing records yet." />
-        <ReportTable title="Active Reservation Queue" columns={['Member', 'Book', 'Queue position', 'Status', 'Reserved at']} rows={summary.reservations.map((reservation) => [
-          reservation.user.username, reservation.book.title, reservation.queue_position, reservation.status, new Date(reservation.created_at).toLocaleString(),
-        ])} emptyText="No active reservations." />
+        <ReportTable title="Digital Books" columns={['Title', 'Author', 'ISBN', 'Category', 'Readable']} rows={summary.books.map((book) => [book.title, book.author, book.isbn, book.category, book.has_virtual_version ? 'Yes' : 'No'])} emptyText="No books in catalogue." />
         <ReportTable title="Successful Login History" columns={['Username', 'Email', 'Role', 'Logged in at']} rows={summary.login_activities.map((activity) => [
           activity.user.username, activity.user.email || 'No email', activity.user.role === 'user' ? 'Member' : 'Admin',
           new Date(activity.logged_in_at).toLocaleString(),
@@ -737,7 +709,7 @@ function AccountSettings({ api, user, onUserChange, onDeactivated, showMessage }
       showMessage('Your account has been deactivated.');
     } catch (error) { showMessage(error.message); setBusy(false); }
   }
-  return <section className="panel account-panel"><p className="eyebrow">Account settings</p><h2>Manage your profile</h2><p>Choose a photo to personalise your library account. It appears alongside your name while you are signed in.</p><div className="profile-photo-editor"><div className="profile-photo-preview">{user.profile_photo ? <img src={user.profile_photo} alt="Your profile" /> : <span>{user.username.slice(0, 1).toUpperCase()}</span>}</div><div><strong>{user.username}</strong><span className="profile-role">{user.role === 'admin' ? 'Library administrator' : 'Library member'}</span><label className="photo-upload">{photoBusy ? 'Saving photo...' : 'Choose profile photo'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={photoBusy} onChange={(event) => { updatePhoto(event.target.files?.[0]).catch(() => showMessage('Could not read that image.')); event.target.value = ''; }} /></label>{user.profile_photo && <button type="button" className="link-button" onClick={removePhoto} disabled={photoBusy}>Remove photo</button>}<small>PNG, JPEG, WEBP, or GIF — maximum 1.5 MB.</small></div></div>{user.role === 'user' && <div className="danger-zone"><div><strong>Deactivate account</strong><span>Signing in, borrowing, reservations, and notifications will no longer be available.</span></div>{confirming ? <div className="confirm-actions"><button type="button" className="secondary" onClick={() => setConfirming(false)} disabled={busy}>Keep account</button><button type="button" className="danger" onClick={deactivate} disabled={busy}>{busy ? 'Deactivating...' : 'Confirm deactivation'}</button></div> : <button type="button" className="danger" onClick={() => setConfirming(true)}>Deactivate account</button>}</div>}</section>;
+  return <section className="panel account-panel"><p className="eyebrow">Account settings</p><h2>Manage your profile</h2><p>Choose a photo to personalise your library account. It appears alongside your name while you are signed in.</p><div className="profile-photo-editor"><div className="profile-photo-preview">{user.profile_photo ? <img src={user.profile_photo} alt="Your profile" /> : <span>{user.username.slice(0, 1).toUpperCase()}</span>}</div><div><strong>{user.username}</strong><span className="profile-role">{user.role === 'admin' ? 'Library administrator' : 'Library member'}</span><label className="photo-upload">{photoBusy ? 'Saving photo...' : 'Choose profile photo'}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={photoBusy} onChange={(event) => { updatePhoto(event.target.files?.[0]).catch(() => showMessage('Could not read that image.')); event.target.value = ''; }} /></label>{user.profile_photo && <button type="button" className="link-button" onClick={removePhoto} disabled={photoBusy}>Remove photo</button>}<small>PNG, JPEG, WEBP, or GIF — maximum 1.5 MB.</small></div></div>{user.role === 'user' && <div className="danger-zone"><div><strong>Deactivate account</strong><span>Signing in and digital book reading will no longer be available.</span></div>{confirming ? <div className="confirm-actions"><button type="button" className="secondary" onClick={() => setConfirming(false)} disabled={busy}>Keep account</button><button type="button" className="danger" onClick={deactivate} disabled={busy}>{busy ? 'Deactivating...' : 'Confirm deactivation'}</button></div> : <button type="button" className="danger" onClick={() => setConfirming(true)}>Deactivate account</button>}</div>}</section>;
 }
 
 function ReportTable({ title, columns, rows, emptyText }) {
@@ -775,7 +747,7 @@ function UserDashboard({ setView }) {
         <div className="dashboard-intro-copy">
           <p className="eyebrow">Member Dashboard</p>
           <h2>Welcome back to your library workspace.</h2>
-          <p>Browse available books, search the catalogue, and check borrowed items.</p>
+          <p>Browse the digital catalogue and read available books online.</p>
         </div>
         <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
       </div>
@@ -783,8 +755,6 @@ function UserDashboard({ setView }) {
         <DashboardAction tone="blue" title="View Books" text="See all available books in the library." action="Open catalogue" onClick={() => setView('books')} />
         <DashboardAction tone="cyan" title="Search Book" text="Search by title, author, category, or ISBN." action="Find a book" onClick={() => setView('books')} />
         <DashboardAction tone="green" title="Recommended Books" text="Browse suggested books selected from available library titles." action="Explore picks" onClick={() => setView('recommendations')} />
-        <DashboardAction tone="amber" title="My Borrowed Books" text="View books you have borrowed and return them." action="View records" onClick={() => setView('my-books')} />
-        <DashboardAction tone="green" title="My Reservations" text="Track your place in book waiting lists." action="View queue" onClick={() => setView('reservations')} />
       </div>
     </section>
   );
@@ -797,30 +767,22 @@ function AdminDashboard({ summary, setView }) {
         <div className="dashboard-intro admin-intro">
           <div className="dashboard-intro-copy">
             <p className="eyebrow">Admin Dashboard</p>
-            <h2>Control the library catalogue and daily borrowing work.</h2>
-            <p>Use the admin tools to maintain books, view members, inspect borrowed records, and track activity.</p>
+            <h2>Manage the digital library catalogue.</h2>
+            <p>Add online reading material, manage members, and review library activity.</p>
           </div>
           <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
         </div>
         <div className="admin-stat-grid">
           <Stat label="Total books" value={summary.stats.total_books} />
-          <Stat label="Borrowed" value={summary.stats.total_borrowed} />
-          <Stat label="Returned" value={summary.stats.total_returned} />
           <Stat label="Members" value={summary.stats.total_users} />
-          <Stat label="Reservations" value={summary.stats.active_reservations} />
-          <Stat label="Borrow approvals" value={summary.stats.pending_borrow_approvals || 0} />
-          <Stat label="Return approvals" value={summary.stats.pending_return_approvals || 0} />
-          <Stat label="Low stock titles" value={summary.stats.low_stock_books || 0} />
+          <Stat label="Readable books" value={summary.stats.readable_books} />
         </div>
       </div>
       <div className="dashboard-grid">
         <DashboardAction tone="blue" title="Manage Books" text="Add, update, and delete books." action="Manage" onClick={() => setView('books')} />
         <DashboardAction tone="cyan" title="Manage Members" text="View library members and administrators." action="View members" onClick={() => setView('users')} />
-        <DashboardAction tone="amber" title="Borrowing Approvals" text={(summary.stats.pending_borrow_approvals || 0) + ' borrow requests and ' + (summary.stats.pending_return_approvals || 0) + ' return requests need review.'} action="Review requests" onClick={() => setView('borrowed')} />
-        <DashboardAction tone="red" title="Inventory and Alerts" text={(summary.stats.low_stock_books || 0) + ' titles are at or below the low-stock threshold.'} action="View alerts" onClick={() => setView('notifications')} />
-        <DashboardAction tone="blue" title="View Borrowed Books" text="See all borrowing records." action="View records" onClick={() => setView('borrowed')} />
-        <DashboardAction tone="red" title="Reservation Queue" text="View members waiting for unavailable books." action="Open queue" onClick={() => setView('reservations')} />
-        <DashboardAction tone="green" title="View Reports" text="Review totals and library activity." action="Open reports" onClick={() => setView('reports')} />
+        <DashboardAction tone="green" title="Manage Digital Books" text="Add or update online reading material." action="Manage catalogue" onClick={() => setView('books')} />
+        <DashboardAction tone="green" title="View Reports" text="Review members and library activity." action="Open reports" onClick={() => setView('reports')} />
       </div>
     </section>
   );
@@ -837,7 +799,7 @@ function Stat({ label, value }) {
 
 function Recommendations({ api, showMessage }) {
   const [books, setBooks] = useState([]);
-  const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
+  const [readerBook, setReaderBook] = useState(null);
   const [input, setInput] = useState('');
   const [profile, setProfile] = useState({
     categories: [],
@@ -855,8 +817,7 @@ function Recommendations({ api, showMessage }) {
   useEffect(() => {
     api.get('/api/books/')
       .then((data) => {
-        const availableBooks = data.books.filter((book) => book.available_copies > 0 || book.has_virtual_version);
-        setBooks(availableBooks);
+        setBooks(data.books);
       })
       .catch((error) => showMessage(error.message));
   }, [api, showMessage]);
@@ -1032,7 +993,7 @@ function Recommendations({ api, showMessage }) {
     });
 
     if (!profile.categories.length && !profile.tones.length && !profile.goals.length) {
-      score += book.available_copies;
+      score += book.has_virtual_version ? 1 : 0;
     }
 
     return score;
@@ -1066,7 +1027,7 @@ function Recommendations({ api, showMessage }) {
 
   const recommendedBooks = [...books]
     .map((book) => ({ ...book, score: recommendationScore(book) }))
-    .sort((a, b) => b.score - a.score || b.available_copies - a.available_copies)
+    .sort((a, b) => b.score - a.score)
     .slice(0, 6);
   const hasProfile = profile.categories.length || profile.tones.length || profile.goals.length;
   const profileChips = unique([...profile.categories, ...profile.tones, ...profile.goals]).slice(0, 10);
@@ -1132,42 +1093,23 @@ function Recommendations({ api, showMessage }) {
             <div>
               <h3>{book.title}</h3>
               <p>{book.author}</p>
-              <span>{book.category} - {book.available_copies}/{book.quantity} available</span>
+              <span>{book.category} · Read online</span>
               <small className="match-score">{book.score > 0 ? `${book.score} match points` : 'Popular available title'}</small>
               <small className="recommendation-reason">Recommended because it {recommendationReason(book)}.</small>
             </div>
-            <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>
+            <button type="button" onClick={() => setReaderBook(book)}>Read Book</button>
           </article>
         ))}
       </div>
-      {borrowChoiceBook && <BorrowFormatDialog
-        api={api}
-        book={borrowChoiceBook}
-        onClose={() => setBorrowChoiceBook(null)}
-        onBorrowed={async () => {
-          setBorrowChoiceBook(null);
-          const data = await api.get('/api/books/');
-          setBooks(data.books.filter((item) => item.available_copies > 0 || item.has_virtual_version));
-        }}
-        onReserve={async () => {
-          try {
-            const result = await api.post(`/api/books/${borrowChoiceBook.id}/reserve/`, {});
-            setBorrowChoiceBook(null);
-            showMessage(`Physical book reserved. Queue position: ${result.reservation.queue_position}.`);
-          } catch (error) {
-            showMessage(error.message);
-          }
-        }}
-        showMessage={showMessage}
-      />}
+      {readerBook && <BookReader api={api} book={readerBook} onClose={() => setReaderBook(null)} showMessage={showMessage} />}
     </section>
   );
 }
 
-function BookBrowser({ api, canBorrow, showMessage }) {
+function BookBrowser({ api, canRead, showMessage }) {
   const [books, setBooks] = useState([]);
   const [query, setQuery] = useState('');
-  const [borrowChoiceBook, setBorrowChoiceBook] = useState(null);
+  const [readerBook, setReaderBook] = useState(null);
 
   async function loadBooks(search = query) {
     const data = await api.get(`/api/books/?q=${encodeURIComponent(search)}`);
@@ -1178,22 +1120,13 @@ function BookBrowser({ api, canBorrow, showMessage }) {
     loadBooks('').catch((error) => showMessage(error.message));
   }, []);
 
-  async function reserve(book) {
-    try {
-      const data = await api.post(`/api/books/${book.id}/reserve/`);
-      showMessage(`Reserved ${book.title}. You are number ${data.reservation.queue_position} in the queue.`);
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
-
   return (
     <section className="books-page">
       <div className="books-hero">
         <div className="page-hero-copy">
           <p className="eyebrow">Library Catalogue</p>
-          <h2>Find your next book from the shelves.</h2>
-          <p>Search by title, author, ISBN, or category and borrow available books directly from your workspace.</p>
+          <h2>Find a book to read online.</h2>
+          <p>Search the digital catalogue and read available books inside your library account.</p>
         </div>
         <img className="shared-hero-art" src={libraryBooks} alt="A colorful stack of library books" />
       </div>
@@ -1213,273 +1146,40 @@ function BookBrowser({ api, canBorrow, showMessage }) {
               <h3>{book.title}</h3>
               <p>{book.author}</p>
               <span>{book.category} - ISBN {book.isbn}</span>
-              {book.has_virtual_version && <span className="format-badge virtual-badge">Virtual Book available</span>}
+              <span className="format-badge virtual-badge">Read online</span>
             </div>
             <div className="book-actions">
-              <strong>{book.available_copies}/{book.quantity} available</strong>
-              {canBorrow && (book.available_copies > 0 || book.has_virtual_version
-                ? <button type="button" onClick={() => setBorrowChoiceBook(book)}>Borrow Book</button>
-                : <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>)}
-              {canBorrow && book.available_copies <= 0 && book.has_virtual_version && <button type="button" className="secondary" onClick={() => reserve(book)}>Reserve Physical Copy</button>}
+              {canRead && <button type="button" onClick={() => setReaderBook(book)}>Read Book</button>}
             </div>
           </article>
         ))}
       </div>
       </div>
-      {borrowChoiceBook && <BorrowFormatDialog
-        api={api}
-        book={borrowChoiceBook}
-        onClose={() => setBorrowChoiceBook(null)}
-        onBorrowed={async () => { setBorrowChoiceBook(null); await loadBooks(); }}
-        onReserve={() => { setBorrowChoiceBook(null); reserve(borrowChoiceBook); }}
-        showMessage={showMessage}
-      />}
+      {readerBook && <BookReader api={api} book={readerBook} onClose={() => setReaderBook(null)} showMessage={showMessage} />}
     </section>
   );
 }
 
-function BorrowFormatDialog({ api, book, onClose, onBorrowed, onReserve, showMessage }) {
-  const [busy, setBusy] = useState(false);
-  const [choice, setChoice] = useState('');
-
-  async function borrow(format) {
-    setBusy(true);
-    setChoice(format);
-    try {
-      await api.post(`/api/books/${book.id}/borrow/`, { format });
-      showMessage(format === 'physical'
-        ? 'Your physical book request was sent to the library for approval.'
-        : 'Virtual book borrowed. Open My Borrowed Books to read it.');
-      await onBorrowed();
-    } catch (error) {
-      showMessage(error.message);
-    } finally {
-      setBusy(false);
-      setChoice('');
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <section className="borrow-dialog panel" role="dialog" aria-modal="true" aria-labelledby="borrow-choice-title">
-        <button className="dialog-close" type="button" aria-label="Close" onClick={onClose} disabled={busy}>×</button>
-        <p className="eyebrow">Borrow Book</p>
-        <h2 id="borrow-choice-title">How would you like to borrow this book?</h2>
-        <p className="dialog-book-title">{book.title} · {book.author}</p>
-        <div className="format-choice-grid">
-          {book.has_virtual_version && <article className="format-choice virtual-choice">
-            <span className="format-badge virtual-badge">Virtual Book</span>
-            <p>Read it in the library system or download it to your device.</p>
-            <button type="button" disabled={busy} onClick={() => borrow('virtual')}>{choice === 'virtual' ? 'Borrowing…' : 'Read / Borrow Virtual Book'}</button>
-          </article>}
-          <article className="format-choice physical-choice">
-            <span className="format-badge physical-badge">Physical Book</span>
-            <p>{book.available_copies > 0 ? 'Borrow the library copy and collect it from the library.' : 'There are no physical copies available right now.'}</p>
-            {book.available_copies > 0
-              ? <button type="button" disabled={busy} onClick={() => borrow('physical')}>{choice === 'physical' ? 'Borrowing…' : 'Borrow Physical Book'}</button>
-              : <button type="button" className="secondary" disabled={busy} onClick={onReserve}>Reserve Physical Copy</button>}
-          </article>
-        </div>
-        <button type="button" className="secondary dialog-cancel" onClick={onClose} disabled={busy}>Cancel</button>
-      </section>
-    </div>
-  );
-}
-
-function NotificationBell({ api, openNotifications }) {
-  const [unreadCount, setUnreadCount] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    const load = () => api.get('/api/notifications/')
-      .then((data) => { if (active) setUnreadCount(data.unread_count); })
-      .catch(() => {});
-    load();
-    const timer = window.setInterval(load, 60000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [api]);
-
-  return (
-    <button type="button" className="notification-bell" onClick={openNotifications} aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`}>
-      <span aria-hidden="true">&#128276;</span>
-      {unreadCount > 0 && <strong>{unreadCount > 9 ? '9+' : unreadCount}</strong>}
-    </button>
-  );
-}
-
-function NotificationCenter({ api, showMessage, role = 'user' }) {
-  const [notifications, setNotifications] = useState([]);
-
-  const loadNotifications = useCallback(async () => {
-    const data = await api.get('/api/notifications/');
-    setNotifications(data.notifications);
-  }, [api]);
-
-  useEffect(() => {
-    loadNotifications().catch((error) => showMessage(error.message));
-  }, [loadNotifications, showMessage]);
-
-  async function markRead(notification) {
-    try {
-      await api.post(`/api/notifications/${notification.id}/read/`);
-      setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
-    } catch (error) { showMessage(error.message); }
-  }
-
-  async function markAllRead() {
-    try {
-      await api.post('/api/notifications/read-all/');
-      setNotifications((items) => items.map((item) => ({ ...item, is_read: true })));
-      showMessage('All notifications marked as read.');
-    } catch (error) { showMessage(error.message); }
-  }
-
-  const unreadCount = notifications.filter((notification) => !notification.is_read).length;
-  return (
-    <section className="panel notifications-panel">
-      <div className="notification-heading">
-        <div><p className="eyebrow">Library Updates</p><h2>Notifications</h2><p>{role === 'admin' ? 'Low inventory and physical book requests awaiting approval appear here.' : 'Due dates, overdue books, and reservation updates appear here.'}</p></div>
-        {unreadCount > 0 && <button type="button" className="secondary" onClick={markAllRead}>Mark all as read</button>}
-      </div>
-      <div className="notification-list">
-        {notifications.map((notification) => (
-          <article className={notification.is_read ? 'notification-item' : 'notification-item unread'} key={notification.id}>
-            <div><span className={`notification-type ${notification.type}`}>{notification.type.replace('_', ' ')}</span><h3>{notification.title}</h3><p>{notification.message}</p><small>{new Date(notification.created_at).toLocaleString()}</small></div>
-            {!notification.is_read && <button type="button" onClick={() => markRead(notification)}>Mark read</button>}
-          </article>
-        ))}
-        {!notifications.length && <div className="empty-state">You have no notifications yet.</div>}
-      </div>
-    </section>
-  );
-}
-
-function MyReservations({ api, showMessage }) {
-  const [reservations, setReservations] = useState([]);
-
-  async function loadReservations() {
-    const data = await api.get('/api/my-reservations/');
-    setReservations(data.reservations);
-  }
-
-  useEffect(() => {
-    loadReservations().catch((error) => showMessage(error.message));
-  }, []);
-
-  async function cancel(reservation) {
-    try {
-      await api.post(`/api/my-reservations/${reservation.id}/cancel/`);
-      showMessage(`Cancelled reservation for ${reservation.book.title}.`);
-      loadReservations();
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
-
-  return (
-    <section className="panel">
-      <div className="reservation-heading">
-        <div>
-          <p className="eyebrow">Reservation Queue</p>
-          <h2>My Reservations</h2>
-        </div>
-        <p>When a copy is returned, the first person in the queue is marked ready to borrow it.</p>
-      </div>
-      <div className="table">
-        {reservations.map((reservation) => (
-          <div className="row reservation-row" key={reservation.id}>
-            <span>{reservation.book.title}</span>
-            <span>Position #{reservation.queue_position}</span>
-            <span className={reservation.status === 'ready' ? 'badge ready-badge' : 'badge'}>{reservation.status === 'ready' ? 'Ready to borrow' : 'Waiting'}</span>
-            <button type="button" className="danger" onClick={() => cancel(reservation)}>Cancel</button>
-          </div>
-        ))}
-        {!reservations.length && <div className="empty-state">You have no active reservations.</div>}
-      </div>
-    </section>
-  );
-}
-
-function BorrowedBooks({ api, showMessage }) {
-  const [records, setRecords] = useState([]);
-  const [readerRecord, setReaderRecord] = useState(null);
-
-  async function loadRecords() {
-    const data = await api.get('/api/my-books/');
-    setRecords(data.records);
-  }
-
-  useEffect(() => {
-    loadRecords().catch((error) => showMessage(error.message));
-  }, []);
-
-  async function returnBook(record) {
-    try {
-      await api.post('/api/my-books/' + record.id + '/return/');
-      showMessage(record.book_format === 'physical' ? 'Return request sent to the library for approval.' : 'Book returned.');
-      await loadRecords();
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
-
-  if (readerRecord) {
-    return <BookReader api={api} record={readerRecord} onClose={() => setReaderRecord(null)} showMessage={showMessage} />;
-  }
-
-  return (
-    <section className="panel">
-      <h2>My Borrowed Books</h2>
-      <p className="loan-policy-note">Virtual books return automatically after 7 days. Return physical books to the library; an administrator must approve each physical return.</p>
-      <div className="table">
-        {records.map((record) => {
-          const isVirtual = record.book_format === 'virtual';
-          const isActive = ['borrowed', 'overdue'].includes(record.status);
-          const isPending = record.status === 'pending_approval';
-          return <div className="row borrowed-book-row" key={record.id}>
-            <span><strong>{record.book.title}</strong><small>{record.book.author}</small></span>
-            <span className={'format-badge ' + (isVirtual ? 'virtual-badge' : 'physical-badge')}>{isVirtual ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{isPending ? 'Awaiting approval' : record.status === 'rejected' ? 'Request declined' : record.return_requested_at ? 'Return awaiting approval' : record.status}</span>
-            <span>{isActive ? 'Due ' + record.due_date : ''}</span>
-            {isVirtual && isActive && <div className="borrowed-book-actions">
-              <button type="button" onClick={() => setReaderRecord(record)}>Read Book</button>
-            </div>}
-            {isPending && <span className="collection-required">Your physical book request is waiting for library approval.</span>}
-            {!isVirtual && isActive && <span className={record.collection_confirmed ? 'collection-confirmed' : 'collection-required'}>
-              {record.collection_confirmed
-                ? record.return_requested_at ? 'Your return is waiting for library approval.' : 'Collection confirmed by the library. You can now return this book.'
-                : 'Collection Required: collect this book from the library. An administrator must confirm collection before you can return it.'}
-            </span>}
-            {isVirtual && isActive && <button type="button" className="secondary" onClick={() => returnBook(record)}>Return Book</button>}
-            {!isVirtual && isActive && record.collection_confirmed && !record.return_requested_at && <button type="button" className="secondary" onClick={() => returnBook(record)}>Request Return</button>}
-          </div>;
-        })}
-        {!records.length && <div className="empty-state">You have no borrowed books.</div>}
-      </div>
-    </section>
-  );
-}
-
-function BookReader({ api, record, onClose, showMessage }) {
+function BookReader({ api, book, onClose, showMessage }) {
   const [text, setText] = useState('');
   const [page, setPage] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const isPdf = record.book.virtual_file_type === 'application/pdf';
+  const isPdf = book.virtual_file_type === 'application/pdf';
   const pages = isPdf ? [] : (text.match(/[\s\S]{1,3200}/g) || ['']);
 
   useEffect(() => {
     if (isPdf) return;
-    api.get('/api/my-books/' + record.id + '/read/')
+    api.get('/api/books/' + book.id + '/read/')
       .then((data) => setText(data.text))
       .catch((error) => showMessage(error.message));
-  }, [api, record.id, isPdf, showMessage]);
+  }, [api, book.id, isPdf, showMessage]);
 
-  const pdfSource = '/api/my-books/' + record.id + '/content/#toolbar=0&page=' + (page + 1) + '&zoom=' + Math.round(zoom * 100);
+  const pdfSource = '/api/books/' + book.id + '/content/#toolbar=0&page=' + (page + 1) + '&zoom=' + Math.round(zoom * 100);
   return (
     <section className="panel book-reader">
       <div className="reader-header">
-        <div><p className="eyebrow">Virtual Book</p><h2>{record.book.title}</h2><p>{record.book.author}</p></div>
-        <button type="button" className="secondary" onClick={onClose}>Back to My Borrowed Books</button>
+        <div><p className="eyebrow">Read Online</p><h2>{book.title}</h2><p>{book.author}</p></div>
+        <button type="button" className="secondary" onClick={onClose}>Back to Catalogue</button>
       </div>
       <div className="reader-toolbar">
         <button type="button" className="secondary" disabled={page <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous Page</button>
@@ -1497,8 +1197,8 @@ function BookReader({ api, record, onClose, showMessage }) {
         </>}
       </div>
       {isPdf
-        ? <iframe className="pdf-reader-frame" title={'Reading ' + record.book.title} src={pdfSource} />
-        : <article className="text-reader-page" style={{ fontSize: zoom + 'rem' }}>{text ? pages[page] : 'Loading virtual book…'}</article>}
+        ? <iframe className="pdf-reader-frame" title={'Reading ' + book.title} src={pdfSource} />
+        : <article className="text-reader-page" style={{ fontSize: zoom + 'rem' }}>{text ? pages[page] : 'Loading book…'}</article>}
       <div className="reader-footer">
         <button type="button" className="secondary" onClick={onClose}>Close Reader</button>
       </div>
@@ -1524,7 +1224,7 @@ function BookManager({ api, showMessage }) {
       if (virtualFile) {
         await api.upload(`/api/admin/books/${saved.book.id}/virtual-file/?filename=${encodeURIComponent(virtualFile.name)}`, virtualFile);
       }
-      showMessage(virtualFile ? 'Book saved with its virtual version.' : editing.id ? 'Book updated.' : 'Book added.');
+      showMessage(virtualFile ? 'Digital book saved and ready to read.' : editing.id ? 'Book updated.' : 'Book details saved. Add a digital file to make it readable.');
       setEditing(emptyBook);
       setVirtualFile(null);
       setBooksKey((key) => key + 1);
@@ -1563,20 +1263,12 @@ function BookManager({ api, showMessage }) {
           </label>
         ))}
         <label>
-          Quantity
-          <input type="number" min="0" value={editing.quantity} onChange={(event) => setEditing({ ...editing, quantity: event.target.value })} />
-        </label>
-        <label>
-          Available copies
-          <input type="number" min="0" value={editing.available_copies} onChange={(event) => setEditing({ ...editing, available_copies: event.target.value })} />
-        </label>
-        <label>
-          Virtual book file (PDF or TXT)
+          Digital book file (PDF or TXT)
           <input type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={(event) => setVirtualFile(event.target.files?.[0] || null)} />
         </label>
-        <p className="form-hint">PDF or plain text, up to 50 MB. The file is private and members can access it only while they have an active virtual loan.</p>
-        {editing.id && editing.has_virtual_version && <div className="virtual-file-current"><span>Virtual version: {editing.virtual_file_name}</span><button type="button" className="danger" onClick={removeVirtualVersion}>Remove virtual version</button></div>}
-        <button className="primary" type="submit">Save book</button>
+        <p className="form-hint">PDF or plain text, up to 50 MB. Members can read the private file online while signed in. Downloads are disabled.</p>
+        {editing.id && editing.has_virtual_version && <div className="virtual-file-current"><span>Digital file: {editing.virtual_file_name}</span><button type="button" className="danger" onClick={removeVirtualVersion}>Remove digital file</button></div>}
+        <button className="primary" type="submit">Save digital book</button>
       </form>
       <ManagedBookList key={booksKey} api={api} onEdit={(book) => { setEditing(book); setVirtualFile(null); }} onDelete={removeBook} showMessage={showMessage} />
     </div>
@@ -1587,7 +1279,7 @@ function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
   const [books, setBooks] = useState([]);
 
   useEffect(() => {
-    api.get('/api/books/').then((data) => setBooks(data.books)).catch((error) => showMessage(error.message));
+    api.get('/api/books/?include_unreadable=1').then((data) => setBooks(data.books)).catch((error) => showMessage(error.message));
   }, [api, showMessage]);
 
   return (
@@ -1598,68 +1290,11 @@ function ManagedBookList({ api, onEdit, onDelete, showMessage }) {
           <div className="row" key={book.id}>
             <span>{book.title}</span>
             <span>{book.author}</span>
-            <span>{book.available_copies}/{book.quantity}</span>
-            <span className={book.has_virtual_version ? 'format-badge virtual-badge' : 'format-badge physical-badge'}>{book.has_virtual_version ? 'Virtual + physical' : 'Physical only'}</span>
+            <span>{book.has_virtual_version ? 'Readable online' : 'No digital file'}</span>
             <button type="button" onClick={() => onEdit(book)}>Edit</button>
             <button type="button" className="danger" onClick={() => onDelete(book)}>Delete</button>
           </div>
         ))}
-      </div>
-    </section>
-  );
-}
-
-function RecordTable({ records, api, reload, showMessage }) {
-  async function decide(record, action) {
-    try { await api.post('/api/admin/borrow-records/' + record.id + '/decision/', { action }); await reload(); showMessage('Request updated.'); }
-    catch (error) { showMessage(error.message); }
-  }
-  async function confirmCollection(record) {
-    try {
-      await api.post('/api/admin/borrow-records/' + record.id + '/collection/');
-      await reload();
-      showMessage('Collection confirmed for ' + record.user.username + '.');
-    } catch (error) {
-      showMessage(error.message);
-    }
-  }
-
-  return (
-    <section className="panel">
-      <h2>Borrowed Books</h2>
-      <div className="table">
-        {records.map((record) => (
-          <div className="row" key={record.id}>
-            <span>{record.user.username}</span>
-            <span>{record.book.title}</span>
-            <span className={'format-badge ' + (record.book_format === 'virtual' ? 'virtual-badge' : 'physical-badge')}>{record.book_format === 'virtual' ? 'Virtual Book' : 'Physical Book'}</span>
-            <span>{record.status}</span>
-            <span>Due {record.due_date}</span>
-            {record.status === 'pending_approval' && <div className="borrowed-book-actions"><button type="button" className="primary" onClick={() => decide(record, 'approve_borrow')}>Approve Borrow</button><button type="button" className="secondary" onClick={() => decide(record, 'reject_borrow')}>Decline</button></div>}
-            {record.status !== 'pending_approval' && record.return_requested_at && <div className="borrowed-book-actions"><button type="button" className="primary" onClick={() => decide(record, 'approve_return')}>Approve Return</button><button type="button" className="secondary" onClick={() => decide(record, 'reject_return')}>Decline Return</button></div>}
-            {record.book_format !== 'virtual' && record.status === 'borrowed' && !record.return_requested_at && (record.collection_confirmed ? <span className="collection-confirmed">Collection confirmed</span> : <button type="button" onClick={() => confirmCollection(record)}>Confirm Collection</button>)}
-          </div>
-        ))}
-        {!records.length && <div className="empty-state">No borrowing records yet.</div>}
-      </div>
-    </section>
-  );
-}
-
-function ReservationTable({ reservations }) {
-  return (
-    <section className="panel">
-      <h2>Active Reservation Queue</h2>
-      <div className="table">
-        {reservations.map((reservation) => (
-          <div className="row reservation-row" key={reservation.id}>
-            <span>{reservation.user.username}</span>
-            <span>{reservation.book.title}</span>
-            <span>Position #{reservation.queue_position}</span>
-            <span className={reservation.status === 'ready' ? 'badge ready-badge' : 'badge'}>{reservation.status}</span>
-          </div>
-        ))}
-        {!reservations.length && <div className="empty-state">No members are waiting for a book.</div>}
       </div>
     </section>
   );

@@ -1,4 +1,4 @@
--- Apply after inventory_concurrency_migration.sql in the Supabase SQL Editor.
+-- Apply to an existing Supabase project before the read-only digital cleanup.
 begin;
 alter table public.users add column if not exists admin_mfa_secret text;
 alter table public.users add column if not exists admin_mfa_enabled boolean not null default false;
