@@ -1563,6 +1563,7 @@ input:focus, select:focus { border-color: #649184; box-shadow: 0 0 0 3px rgba(31
 .category-reader-card strong { font-size: 1.15rem; }
 .category-reader-card span, .category-reader-card small { color: var(--library-muted); }
 .reader-shelf { display: grid; gap: 12px; margin-top: 24px; }
+.popular-books-empty-card { margin-top: 24px; }
 .popular-books-empty { margin-top: 14px; }
 .reader-shelf .book-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 205px), 1fr)); }
 .reader-shelf .book-card { grid-template-columns: 92px minmax(0, 1fr); grid-template-rows: auto auto; }

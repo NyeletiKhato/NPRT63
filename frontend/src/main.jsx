@@ -1018,7 +1018,7 @@ function UserDashboard({ api, setView, showMessage }) {
         {loading?<p className="loading-state">Loading your library…</p>:loadError?<div className="empty-state"><p>We couldn’t load your library right now.</p><button type="button" className="secondary" onClick={load}>Try again</button></div>:featuredBooks.length?<BookShelf books={featuredBooks} onOpen={setReaderBook}/>:<p className="empty-state">No featured books yet. Explore the catalogue to discover available reading.</p>}
         {continueBooks.length>0&&<ReaderShelf title="Continue reading" books={continueBooks} onOpen={setReaderBook} />}
         {recentlyBooks.length>0&&<ReaderShelf title="Recently read" books={recentlyBooks} onOpen={setReaderBook} />}
-        {popularBooks.length>0?<ReaderShelf title="Popular this month" books={popularBooks} onOpen={setReaderBook} />:<div className="data-card"><h3>Popular books</h3><p className="empty-state popular-books-empty">Reader activity will appear here as the collection is explored.</p></div>}
+        {popularBooks.length>0?<ReaderShelf title="Popular this month" books={popularBooks} onOpen={setReaderBook} />:<div className="data-card popular-books-empty-card"><h3>Popular books</h3><p className="empty-state popular-books-empty">Reader activity will appear here as the collection is explored.</p></div>}
         {recentAddedBooks.length>0&&<ReaderShelf title="Recently added" books={recentAddedBooks} onOpen={setReaderBook} />}
       </div>
       {readerBook&&<BookReader api={api} book={readerBook} onClose={()=>{setReaderBook(null);load();}} showMessage={showMessage}/>}
