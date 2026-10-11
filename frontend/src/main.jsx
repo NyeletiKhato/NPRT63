@@ -990,8 +990,13 @@ function UserDashboard({ api, setView, showMessage }) {
   const [homepage,setHomepage]=useState({featured:[],recent:[]}),[readerHome,setReaderHome]=useState({continue_reading:[],recently_read:[],popular:[]}),[readerBook,setReaderBook]=useState(null),[loading,setLoading]=useState(true),[loadError,setLoadError]=useState(''),[search,setSearch]=useState('');
   const load=useCallback(()=>{setLoading(true);setLoadError('');Promise.all([api.get('/api/catalogue/homepage/'),api.get('/api/reader/home/')]).then(([catalogue,home])=>{setHomepage(catalogue);setReaderHome(home);}).catch(error=>{setLoadError(error.message);showMessage(error.message);}).finally(()=>setLoading(false));},[api,showMessage]);
   useEffect(()=>{load();},[load]);
-  const continueBooks=readerHome.continue_reading.map(item=>({...item.book,resumePage:item.location?.page||1}));
-  const recentlyBooks=readerHome.recently_read.map(item=>({...item.book,lastOpened:item.last_opened_at}));
+  const seenBookIds=new Set();
+  const uniqueShelfBooks=(items)=>items.filter(book=>{if(!book||seenBookIds.has(book.id))return false;seenBookIds.add(book.id);return true;});
+  const featuredBooks=uniqueShelfBooks(homepage.featured).slice(0,4);
+  const continueBooks=uniqueShelfBooks(readerHome.continue_reading.map(item=>({...item.book,resumePage:item.location?.page||1})));
+  const recentlyBooks=uniqueShelfBooks(readerHome.recently_read.map(item=>({...item.book,lastOpened:item.last_opened_at})));
+  const popularBooks=uniqueShelfBooks(readerHome.popular);
+  const recentAddedBooks=uniqueShelfBooks(homepage.recent);
   return (
     <section className="dashboard">
       <div className="dashboard-intro">
@@ -1010,18 +1015,18 @@ function UserDashboard({ api, setView, showMessage }) {
       </div>
       <div className="homepage-books">
         <div className="section-heading section-heading-row"><div><p className="eyebrow">Picked for the library</p><h2>Featured books</h2></div><button type="button" className="secondary" onClick={()=>setView('books')}>Browse all books</button></div>
-        {loading?<p className="loading-state">Loading your library…</p>:loadError?<div className="empty-state"><p>We couldn’t load your library right now.</p><button type="button" className="secondary" onClick={load}>Try again</button></div>:homepage.featured.length?<BookShelf books={homepage.featured.slice(0,4)} onOpen={setReaderBook} onDetails={(book)=>setReaderBook(book)}/>:<p className="empty-state">No featured books yet. Explore the catalogue to discover available reading.</p>}
+        {loading?<p className="loading-state">Loading your library…</p>:loadError?<div className="empty-state"><p>We couldn’t load your library right now.</p><button type="button" className="secondary" onClick={load}>Try again</button></div>:featuredBooks.length?<BookShelf books={featuredBooks} onOpen={setReaderBook}/>:<p className="empty-state">No featured books yet. Explore the catalogue to discover available reading.</p>}
         {continueBooks.length>0&&<ReaderShelf title="Continue reading" books={continueBooks} onOpen={setReaderBook} />}
         {recentlyBooks.length>0&&<ReaderShelf title="Recently read" books={recentlyBooks} onOpen={setReaderBook} />}
-        {readerHome.popular.length>0?<ReaderShelf title="Popular this month" books={readerHome.popular} onOpen={setReaderBook} />:<div className="data-card"><h3>Popular books</h3><p className="empty-state">Reader activity will appear here as the collection is explored.</p></div>}
-        {homepage.recent.length>0&&<ReaderShelf title="Recently added" books={homepage.recent} onOpen={setReaderBook} />}
+        {popularBooks.length>0?<ReaderShelf title="Popular this month" books={popularBooks} onOpen={setReaderBook} />:<div className="data-card"><h3>Popular books</h3><p className="empty-state">Reader activity will appear here as the collection is explored.</p></div>}
+        {recentAddedBooks.length>0&&<ReaderShelf title="Recently added" books={recentAddedBooks} onOpen={setReaderBook} />}
       </div>
       {readerBook&&<BookReader api={api} book={readerBook} onClose={()=>{setReaderBook(null);load();}} showMessage={showMessage}/>}
     </section>
   );
 }
 
-function BookShelf({books,onOpen}) { return <ReaderShelf title="Featured books" books={books} onOpen={onOpen}/>; }
+function BookShelf({books,onOpen}) { return <div className="book-grid featured-book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>onOpen(book)} aria-label={`Open ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><h3>{book.title}</h3><p>{book.author}</p><span>{book.category||'Digital book'} · Read online</span></div><button type="button" className="primary" onClick={()=>onOpen(book)}>Read Book</button></article>)}</div>; }
 function ReaderShelf({title,books,onOpen}) { return <section className="reader-shelf"><div className="section-heading section-heading-row"><h3>{title}</h3></div><div className="book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>onOpen(book)} aria-label={`Open ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><h3>{book.title}</h3><p>{book.author}</p><span>{book.category||'Digital book'} · Read online</span>{book.resumePage&&<small>Last page: {book.resumePage}</small>}{book.lastOpened&&<small>Opened {new Date(book.lastOpened).toLocaleDateString()}</small>}</div><button type="button" className="primary" onClick={()=>onOpen(book)}>Read Book</button></article>)}</div></section>; }
 
 function AdminDashboard({ summary, setView }) {
