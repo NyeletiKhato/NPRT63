@@ -293,10 +293,6 @@ app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (
   }
   const password = String(req.body.password || '');
   if (!user || Buffer.byteLength(password, 'utf8') > 72 || !passwordMatches(password, user.password_hash)) { await writeAudit(req, 'login_failed', 'user', username, { requested_role: req.body.role || 'user' }); return res.status(400).json({ error: 'Invalid username or password.' }); }
-  if (user.role === 'user' && !user.email_verified) {
-    await writeAudit(req, 'login_denied_unverified_email', 'user', user.id);
-    return res.status(403).json({ error: 'Your email is not confirmed yet. Open the newest confirmation email or request another one before signing in.' });
-  }
   if (!user.is_active || user.role !== (req.body.role || 'user')) {
     await writeAudit(req, 'login_denied', 'user', user.id);
     return res.status(400).json({ error: 'Invalid username or password.' });
@@ -323,22 +319,12 @@ app.post('/api/register/', registrationLimiter, endpoint(async (req, res) => {
   if (!username || username.length > 64 || !email || email.length > 254 || !password) return res.status(400).json({ error: 'Enter a username up to 64 characters, a valid email address, and a password.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Use a password between 8 and 72 UTF-8 bytes.' });
-  if (!emailConfigured) return res.status(503).json({ error: 'Email confirmation is not configured. Please contact library staff.' });
-  const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: false }).select().single();
+  const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: true }).select().single();
   if (error) {
-    if (error.code === '23505') return res.status(201).json({ message: 'If the account can be created, a confirmation message will be sent to the address provided.', verification_required: true });
+    if (error.code === '23505') return res.status(409).json({ error: 'That username or email is already in use. Sign in or reset the password for the existing account.' });
     return res.status(400).json({ error: 'We could not create the account. Please check the details or try again.' });
   }
-  const token = crypto.randomBytes(32).toString('hex');
-  const { error: tokenError } = await db.from('email_verification_tokens').insert({ user_id: user.id, token_hash: hashToken(token), expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() });
-  if (tokenError) { await db.from('users').delete().eq('id', user.id); throw tokenError; }
-  try {
-    await sendVerificationEmail(user, token);
-  } catch (error) {
-    await db.from('users').delete().eq('id', user.id);
-    throw error;
-  }
-  await writeAudit({ ...req, user }, 'member_registration_pending_verification', 'user', user.id); res.status(201).json({ message: 'Account created. Check your email for a confirmation link before signing in.', verification_required: true });
+  await writeAudit({ ...req, user }, 'member_registered', 'user', user.id); res.status(201).json({ account_created: true, message: 'Account created. You can sign in now.' });
 }));
 app.get('/api/email/verify/', endpoint(async (req, res) => {
   const token = String(req.query.token || '');
@@ -745,15 +731,6 @@ app.patch('/api/admin/users/:id/', requireAuth, requireRole('admin'), endpoint(a
   if(!['admin','user'].includes(role))return res.status(400).json({error:'Choose a valid role.'});if(target.id===req.user.id&&(role!=='admin'||!active))return res.status(400).json({error:'You cannot remove your own admin access.'});
   if(target.role==='admin'&&(role!=='admin'||!active)){const admins=await many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true));if(admins.length<=1)return res.status(400).json({error:'The last active administrator cannot be deactivated or demoted.'});}
   fail((await db.from('users').update({role,is_active:active}).eq('id',target.id)).error);await writeAudit(req,role!==target.role?'reader_role_changed':active!==target.is_active?(active?'reader_activated':'reader_deactivated'):'reader_updated','user',target.id,{role,is_active:active});res.json({user:safeUser(await getUser(target.id))});
-}));
-app.post('/api/admin/users/:id/confirm-email/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{
-  const target=await getUser(req.params.id);
-  if(!target||target.role!=='user')return res.status(404).json({error:'Reader account not found.'});
-  if(!target.email)return res.status(400).json({error:'This reader has no email address on the account.'});
-  fail((await db.from('users').update({email_verified:true}).eq('id',target.id)).error);
-  fail((await db.from('email_verification_tokens').update({used_at:new Date().toISOString()}).eq('user_id',target.id).is('used_at',null)).error);
-  await writeAudit(req,'reader_email_confirmed_by_admin','user',target.id);
-  res.json({user:safeUser(await getUser(target.id)),message:'Reader email marked as confirmed.'});
 }));
 app.post('/api/admin/users/:id/recovery/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const user=await getUser(req.params.id);if(!user||user.role!=='user')return res.status(404).json({error:'Reader account not found.'});if(!user.email)return res.status(400).json({error:'This reader has no email address on the account.'});if(!emailConfigured)return res.status(503).json({error:'Account recovery email is not configured on the server.'});const code=crypto.randomBytes(16).toString('hex').toUpperCase();await db.from('password_reset_tokens').update({used_at:new Date().toISOString()}).eq('user_id',user.id).is('used_at',null);fail((await db.from('password_reset_tokens').insert({user_id:user.id,token_hash:hashToken(code),expires_at:new Date(Date.now()+900000).toISOString()})).error);await sendEmail({from:mailFrom,to:user.email,subject:'Library account recovery',text:`A library administrator initiated account recovery for you. Your one-time reset code is ${code}. It expires in 15 minutes. If you did not expect this, contact the library.`});await writeAudit(req,'reader_recovery_initiated','user',user.id);res.json({ok:true,message:'A secure one-time recovery code was emailed to the reader.'});}));
 app.delete('/api/admin/users/:id/', requireAuth, requireRole('admin'), endpoint(async (req, res) => { const u = await getUser(req.params.id); if (!u) return res.status(404).json({ error: 'User not found.' }); if (u.role !== 'user') return res.status(403).json({ error: 'Admin accounts cannot be removed here.' }); await writeAudit(req, 'member_deleted', 'user', u.id); fail((await db.from('users').delete().eq('id', u.id)).error); res.json({ ok: true, username: u.username }); }));

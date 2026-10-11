@@ -489,8 +489,6 @@ function EntryScreen({ setAuthScreen }) {
 
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
-  const [resendMode, setResendMode] = useState(false);
-  const [resendIdentifier, setResendIdentifier] = useState('');
   const [mfaStep, setMfaStep] = useState('credentials');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaUrl, setMfaUrl] = useState('');
@@ -498,22 +496,17 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
   async function submit(event) {
     event.preventDefault();
     try {
-      if (resendMode) {
-        const result = await api.post('/api/email/resend-confirmation/', { identifier: resendIdentifier });
-        showMessage(result.message);
-        setResendMode(false);
-        return;
-      }
       let data;
       if (mode === 'login' && role === 'admin' && mfaStep !== 'credentials') {
         const endpoint = mfaStep === 'setup' ? '/api/admin/mfa/confirm-setup/' : '/api/admin/mfa/verify/';
         data = await api.post(endpoint, { code: mfaCode });
+      } else if (mode === 'register') {
+        const registration = await api.post('/api/register/', form);
+        if (!registration.account_created) { showMessage(registration.message || 'You can now sign in.'); setAuthScreen('login-user'); return; }
+        data = await api.post('/api/login/', { ...form, role: 'user' });
       } else {
-        data = mode === 'register'
-          ? await api.post('/api/register/', form)
-          : await api.post('/api/login/', { ...form, role });
+        data = await api.post('/api/login/', { ...form, role });
       }
-      if (mode === 'register' && data.verification_required) { showMessage(data.message); setAuthScreen('login-user'); return; }
       if (data.csrfToken) setCsrfToken(data.csrfToken);
       if (data.mfa_required) { setMfaStep('challenge'); setMfaCode(''); return; }
       if (data.mfa_setup_required) { setMfaStep('setup'); const setup = await request('/api/admin/mfa/setup/', { method: 'POST', body: '{}' }, data.csrfToken); setMfaUrl(setup.otpauthUrl); setMfaCode(''); return; }
@@ -522,7 +515,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       const activeSession = await request('/api/session/');
       if (!activeSession.user || activeSession.user.id !== data.user.id) throw new Error('Your sign-in could not be saved. Refresh the page and try again.');
       if (activeSession.csrfToken) setCsrfToken(activeSession.csrfToken);
-      setUser(activeSession.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' }); showMessage('Signed in successfully.');
+      setUser(activeSession.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' }); showMessage(mode === 'register' ? 'Account created and signed in.' : 'Signed in successfully.');
     } catch (error) { showMessage(error.message); }
   }
 
@@ -542,12 +535,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       </div>
       <form className="panel auth-form" onSubmit={submit}>
         <h3>{mfaStep === 'setup' ? 'Set up authenticator' : mfaStep === 'challenge' ? 'Admin verification' : mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
-        {!mfaFlow ? resendMode ? <>
-          <p>Enter the email address you used to register. If no message arrives, check your spam folder.</p>
-          <label>Email address<input type="email" autoComplete="email" placeholder="you@example.com" value={resendIdentifier} onChange={(event) => setResendIdentifier(event.target.value)} required /></label>
-          <button className="primary" type="submit">Send confirmation email</button>
-          <p className="auth-switch"><button type="button" onClick={() => setResendMode(false)}>Return to sign in</button></p>
-        </> : <>
+        {!mfaFlow ? <>
           <label>{mode === 'login' && role === 'user' ? 'Username or email' : 'Username'}<input autoComplete="username" placeholder={mode === 'login' ? 'Enter your username or registered email' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
           {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
           <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
@@ -557,7 +545,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
           <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required /></label>
           <button className="primary" type="submit">{mfaStep === 'setup' ? 'Enable and sign in' : 'Verify and sign in'}</button>
         </>}
-        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' && !resendMode ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch"><button type="button" onClick={() => { setResendIdentifier(''); setResendMode(true); }}>Resend confirmation email</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
+        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
       </form>
     </section>
   );
@@ -767,7 +755,6 @@ function UserManager({ api, reload, showMessage }) {
   const [users,setUsers]=useState([]),[q,setQ]=useState(''),[status,setStatus]=useState('all'),[role,setRole]=useState('all'),[page,setPage]=useState(0),[total,setTotal]=useState(0),[busy,setBusy]=useState(true);
   const load=useCallback(()=>{setBusy(true);const params=new URLSearchParams({page:String(page)});if(q)params.set('q',q);if(status!=='all')params.set('status',status);if(role!=='all')params.set('role',role);return api.get(`/api/admin/users/?${params}`).then(data=>{setUsers(data.users);setTotal(data.total);}).catch(error=>showMessage(error.message)).finally(()=>setBusy(false));},[api,page,q,status,role,showMessage]);useEffect(()=>{load();},[load]);
   async function setAccount(item,changes){try{await api.patch(`/api/admin/users/${item.id}/`,changes);await load();await reload();showMessage('Reader account updated.');}catch(error){showMessage(error.message);}}
-  async function confirmEmail(item){if(!window.confirm(`Mark ${item.username}'s email as confirmed? Do this only after you have verified that ${item.email} belongs to this member.`))return;try{const result=await api.post(`/api/admin/users/${item.id}/confirm-email/`);await load();await reload();showMessage(result.message);}catch(error){showMessage(error.message);}}
   async function removeUser(item) {
     if (!window.confirm(`Permanently delete ${item.username} and their account data? This cannot be undone. Deactivate the account instead if you only need to block sign-in.`)) return;
     try {
@@ -780,9 +767,9 @@ function UserManager({ api, reload, showMessage }) {
     <div className="section-heading"><div><p className="eyebrow">Reader directory</p><h2>Reader management</h2><p>Search accounts, review registration dates, and update access. Passwords are never displayed.</p></div></div>
     <form className="filter-bar" onSubmit={(e)=>{e.preventDefault();setPage(0);load();}}><label>Search name or email<input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Username or email"/></label><label>Status<select value={status} onChange={(e)=>{setStatus(e.target.value);setPage(0);}}><option value="all">All statuses</option><option value="active">Active</option><option value="deactivated">Deactivated</option></select></label><label>Role<select value={role} onChange={(e)=>{setRole(e.target.value);setPage(0);}}><option value="all">All roles</option><option value="user">Readers</option><option value="admin">Admins</option></select></label><button className="primary">Search</button></form>
     {busy?<p className="loading-state">Loading reader accounts…</p>:<div className="table">{users.length?users.map((item)=><div className="row user-row" key={item.id}>
-        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.email_verified?'Email confirmed':'Email not confirmed'}</small></div>
+        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.email_verified?'Email confirmed':'Email not verified · sign-in allowed'}</small></div>
         <span className={`badge ${!item.is_active?'danger-badge':''}`}>{item.role==='admin'?'Administrator':item.is_active?'Active reader':'Deactivated'}</span>
-        <div className="button-row">{item.role==='user'?<>{!item.email_verified&&<button type="button" className="secondary" disabled={!item.email} onClick={()=>confirmEmail(item)}>Confirm email</button>}<button type="button" className="secondary" onClick={()=>setAccount(item,{is_active:!item.is_active})}>{item.is_active?'Deactivate':'Activate'}</button><button type="button" className="secondary" disabled={!item.email} onClick={async()=>{try{const result=await api.post(`/api/admin/users/${item.id}/recovery/`);showMessage(result.message);}catch(error){showMessage(error.message);}}}>Send recovery</button><button type="button" className="secondary" onClick={()=>{if(window.confirm(`Promote ${item.username} to administrator? They will need to set up two-factor authentication at their next login.`))setAccount(item,{role:'admin'});}}>Promote</button><button type="button" className="danger" onClick={()=>removeUser(item)}>Delete</button></>:<span className="admin-protected">Protected administrator</span>}</div>
+        <div className="button-row">{item.role==='user'?<><button type="button" className="secondary" onClick={()=>setAccount(item,{is_active:!item.is_active})}>{item.is_active?'Deactivate':'Activate'}</button><button type="button" className="secondary" disabled={!item.email} onClick={async()=>{try{const result=await api.post(`/api/admin/users/${item.id}/recovery/`);showMessage(result.message);}catch(error){showMessage(error.message);}}}>Send recovery</button><button type="button" className="secondary" onClick={()=>{if(window.confirm(`Promote ${item.username} to administrator? They will need to set up two-factor authentication at their next login.`))setAccount(item,{role:'admin'});}}>Promote</button><button type="button" className="danger" onClick={()=>removeUser(item)}>Delete</button></>:<span className="admin-protected">Protected administrator</span>}</div>
       </div>):<p className="empty-state">No accounts match these filters.</p>}</div>}
     <div className="pagination"><span>{total} accounts</span><button className="secondary" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</button><span>Page {page+1}</span><button className="secondary" disabled={(page+1)*50>=total} onClick={()=>setPage(page+1)}>Next</button></div>
   </section>;
