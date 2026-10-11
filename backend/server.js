@@ -151,7 +151,7 @@ const ipKey = (req) => req.ip || req.socket.remoteAddress || 'unknown';
 const loginIpLimiter = rateLimit((req) => ['login-ip:' + ipKey(req)], 40, 900, 'Too many sign-in attempts from this connection. Wait 15 minutes before trying again.');
 const loginCredentialLimiter = rateLimit((req) => ['login-user:' + String(req.body.username || '').trim().toLowerCase()], 8, 900, 'Too many sign-in attempts for this account. Wait 15 minutes before trying again.');
 const registrationLimiter = rateLimit((req) => ['register-ip:' + ipKey(req)], 20, 3600, 'Too many accounts were created from this connection. Try again later.');
-const verificationResendLimiter = rateLimit((req) => ['verify-resend-ip:' + ipKey(req), 'verify-resend-user:' + String(req.body.username || '').trim().toLowerCase()], 3, 900, 'Too many confirmation requests. Wait 15 minutes and try again.');
+const verificationResendLimiter = rateLimit((req) => ['verify-resend-ip:' + ipKey(req), 'verify-resend-user:' + String(req.body.identifier || req.body.username || req.body.email || '').trim().toLowerCase()], 3, 900, 'Too many confirmation requests. Wait 15 minutes and try again.');
 const newsletterLimiter = rateLimit((req) => ['newsletter-ip:' + ipKey(req)], 10, 3600, 'Too many newsletter requests. Try again later.');
 const resetLimiter = rateLimit((req) => ['reset-ip:' + ipKey(req), 'reset-user:' + String(req.body.username || '').trim().toLowerCase()], 5, 900, 'Too many password reset attempts. Wait 15 minutes and try again.');
 const mfaLimiter = rateLimit((req) => ['mfa-ip:' + ipKey(req), 'mfa-user:' + String(req.session?.pendingMfaUserId || req.session?.adminMfaSetupUserId || '')], 5, 900, 'Too many verification attempts. Wait 15 minutes and try again.');
@@ -293,7 +293,11 @@ app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (
   }
   const password = String(req.body.password || '');
   if (!user || Buffer.byteLength(password, 'utf8') > 72 || !passwordMatches(password, user.password_hash)) { await writeAudit(req, 'login_failed', 'user', username, { requested_role: req.body.role || 'user' }); return res.status(400).json({ error: 'Invalid username or password.' }); }
-  if (!user.is_active || (user.role === 'user' && !user.email_verified) || user.role !== (req.body.role || 'user')) {
+  if (user.role === 'user' && !user.email_verified) {
+    await writeAudit(req, 'login_denied_unverified_email', 'user', user.id);
+    return res.status(403).json({ error: 'Your email is not confirmed yet. Open the newest confirmation email or request another one before signing in.' });
+  }
+  if (!user.is_active || user.role !== (req.body.role || 'user')) {
     await writeAudit(req, 'login_denied', 'user', user.id);
     return res.status(400).json({ error: 'Invalid username or password.' });
   }
@@ -343,8 +347,9 @@ app.get('/api/email/verify/', endpoint(async (req, res) => {
   if (!row) return res.status(400).send('This confirmation link is invalid or expired. Please register again or contact the library.');
   fail((await db.from('users').update({ email_verified: true }).eq('id', row.user_id)).error);
   fail((await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('id', row.id)).error); await writeAudit({ ...req, user: await getUser(row.user_id) }, 'email_verified', 'user', row.user_id);
-  const portalUrl = new URL('/static/react/?email_confirmed=1', publicAppUrl).toString();
-  res.redirect(303, portalUrl);
+  // Stay on the same public origin that received the confirmation link. This
+  // avoids redirecting members to a stale or local development portal URL.
+  res.redirect(303, '/static/react/?email_confirmed=1');
 }));
 app.post('/api/email/resend-confirmation/', verificationResendLimiter, endpoint(async (req, res) => {
   const identifier = String(req.body.identifier || req.body.username || req.body.email || '').trim().slice(0, 254);
