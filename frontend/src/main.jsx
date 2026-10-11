@@ -543,9 +543,9 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       <form className="panel auth-form" onSubmit={submit}>
         <h3>{mfaStep === 'setup' ? 'Set up authenticator' : mfaStep === 'challenge' ? 'Admin verification' : mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
         {!mfaFlow ? resendMode ? <>
-          <p>If you already created an account but couldn’t confirm it, enter the same username and email address to request a fresh link.</p>
+          <p>Enter both the username and the email address you used to register. If no message arrives, check your spam folder and make sure both details match your account.</p>
           <label>Username<input autoComplete="username" value={resendAccount.username} onChange={(event) => setResendAccount({ ...resendAccount, username: event.target.value })} required /></label>
-          <label>Email<input type="email" autoComplete="email" value={resendAccount.email} onChange={(event) => setResendAccount({ ...resendAccount, email: event.target.value })} required /></label>
+          <label>Registered email<input type="email" autoComplete="email" placeholder="you@example.com" value={resendAccount.email} onChange={(event) => setResendAccount({ ...resendAccount, email: event.target.value })} required /></label>
           <button className="primary" type="submit">Send confirmation email</button>
           <p className="auth-switch"><button type="button" onClick={() => setResendMode(false)}>Return to sign in</button></p>
         </> : <>

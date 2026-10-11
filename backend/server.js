@@ -330,23 +330,25 @@ app.post('/api/email/resend-confirmation/', verificationResendLimiter, endpoint(
   const username = String(req.body.username || '').trim().slice(0, 64);
   const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
   const generic = { message: 'If an unconfirmed account matches those details, a confirmation email will be sent.' };
-  try {
-    const user = username && email ? await one('users', db.from('users').select('id,username,email,is_active,email_verified').eq('username', username).eq('role', 'user').maybeSingle()) : null;
-    if (!user || !user.is_active || user.email_verified || String(user.email || '').toLowerCase() !== email || !mailer || !mailFrom) return res.json(generic);
-    const token = crypto.randomBytes(32).toString('hex');
-    const tokenHash = hashToken(token);
-    fail((await db.from('email_verification_tokens').insert({ user_id: user.id, token_hash: tokenHash, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })).error);
-    try {
-      await sendVerificationEmail(user, token);
-    } catch (error) {
-      await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('token_hash', tokenHash);
-      throw error;
-    }
-    fail((await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('user_id', user.id).is('used_at', null).neq('token_hash', tokenHash)).error);
-    await writeAudit({ ...req, user }, 'email_confirmation_resent', 'user', user.id);
-  } catch (error) {
-    logEvent('error', 'email_confirmation_resend_failed', { request_id: req.requestId, error_code: error.code || 'unknown' });
+  if (!username || !email) return res.status(400).json({ error: 'Enter both the username and the email address used to create the account.' });
+  if (!mailer || !mailFrom) {
+    logEvent('error', 'email_confirmation_resend_unavailable', { request_id: req.requestId, reason: 'mailer_not_configured' });
+    return res.status(503).json({ error: 'Confirmation email is not configured on the library server. Please contact library staff.' });
   }
+  const user = await one('users', db.from('users').select('id,username,email,is_active,email_verified').eq('username', username).eq('role', 'user').maybeSingle());
+  if (!user || !user.is_active || user.email_verified || String(user.email || '').toLowerCase() !== email) return res.json(generic);
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashToken(token);
+  fail((await db.from('email_verification_tokens').insert({ user_id: user.id, token_hash: tokenHash, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })).error);
+  try {
+    await sendVerificationEmail(user, token);
+  } catch (error) {
+    await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('token_hash', tokenHash);
+    logEvent('error', 'email_confirmation_resend_failed', { request_id: req.requestId, error_code: error.code || 'unknown' });
+    return res.status(503).json({ error: 'The confirmation email could not be delivered. Please try again later or contact library staff.' });
+  }
+  fail((await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('user_id', user.id).is('used_at', null).neq('token_hash', tokenHash)).error);
+  await writeAudit({ ...req, user }, 'email_confirmation_resent', 'user', user.id);
   res.json(generic);
 }));
 app.post('/api/logout/', requireAuth, endpoint(async (req, res) => { await writeAudit(req, 'logout', 'user', req.user.id); req.session.destroy(() => res.json({ ok: true })); }));
