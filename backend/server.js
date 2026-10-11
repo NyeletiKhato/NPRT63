@@ -41,6 +41,7 @@ const publicApiUrl = (isProduction && hostedServiceUrl) || process.env.PUBLIC_AP
 if (process.env.NODE_ENV === 'production' && (!publicAppUrl.startsWith('https://') || !publicApiUrl.startsWith('https://') || !String(supabaseUrl).startsWith('https://'))) { console.error('Production requires HTTPS for PUBLIC_APP_URL, PUBLIC_API_URL, and SUPABASE_URL.'); process.exit(1); }
 const smtpHost = process.env.SMTP_HOST;
 const smtpPort = Number(process.env.SMTP_PORT || 587);
+const resendApiKey = process.env.RESEND_API_KEY || '';
 const mailFrom = process.env.MAIL_FROM || process.env.SMTP_USER;
 const mailer = smtpHost ? nodemailer.createTransport({
   host: smtpHost,
@@ -51,6 +52,25 @@ const mailer = smtpHost ? nodemailer.createTransport({
   greetingTimeout: 10000,
   socketTimeout: 20000,
 }) : null;
+const emailConfigured = Boolean(mailFrom && (resendApiKey || mailer));
+async function sendEmail(message) {
+  if (!emailConfigured) throw new Error('Email delivery is not configured. Set RESEND_API_KEY and MAIL_FROM, or configure SMTP.');
+  if (resendApiKey) {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${resendApiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: message.from || mailFrom, to: [message.to], subject: message.subject, text: message.text, html: message.html }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      const error = new Error(`Email provider rejected the message (HTTP ${response.status}).`);
+      error.code = `RESEND_HTTP_${response.status}`;
+      throw error;
+    }
+    return response.json();
+  }
+  return mailer.sendMail({ ...message, from: message.from || mailFrom });
+}
 const logEvent = (level, event, fields = {}) => console[level](JSON.stringify({ level, event, timestamp: new Date().toISOString(), ...fields }));
 const fail = (error) => { if (error) throw error; };
 const one = async (table, query) => { const { data, error } = await query; fail(error); return data; };
@@ -141,11 +161,11 @@ async function clearRateLimits(parts) { for (const part of parts) { const bucket
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 async function sendVerificationEmail(user, token) {
-  if (!mailer || !mailFrom) throw new Error('Email confirmation is not configured. Set SMTP_HOST and MAIL_FROM in .env.');
+  if (!emailConfigured) throw new Error('Email confirmation is not configured. Set RESEND_API_KEY and MAIL_FROM, or configure SMTP.');
   const link = new URL('/api/email/verify/', publicApiUrl);
   link.searchParams.set('token', token);
   const safeName = String(user.username).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-  await mailer.sendMail({
+  await sendEmail({
     from: mailFrom,
     to: user.email,
     subject: 'Confirm your library account',
@@ -299,7 +319,7 @@ app.post('/api/register/', registrationLimiter, endpoint(async (req, res) => {
   if (!username || username.length > 64 || !email || email.length > 254 || !password) return res.status(400).json({ error: 'Enter a username up to 64 characters, a valid email address, and a password.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Use a password between 8 and 72 UTF-8 bytes.' });
-  if (!mailer || !mailFrom) return res.status(503).json({ error: 'Email confirmation is not configured. Please contact library staff.' });
+  if (!emailConfigured) return res.status(503).json({ error: 'Email confirmation is not configured. Please contact library staff.' });
   const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: false }).select().single();
   if (error) {
     if (error.code === '23505') return res.status(201).json({ message: 'If the account can be created, a confirmation message will be sent to the address provided.', verification_required: true });
@@ -331,8 +351,8 @@ app.post('/api/email/resend-confirmation/', verificationResendLimiter, endpoint(
   const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
   const generic = { message: 'If an unconfirmed account matches those details, a confirmation email will be sent.' };
   if (!username || !email) return res.status(400).json({ error: 'Enter both the username and the email address used to create the account.' });
-  if (!mailer || !mailFrom) {
-    logEvent('error', 'email_confirmation_resend_unavailable', { request_id: req.requestId, reason: 'mailer_not_configured' });
+  if (!emailConfigured) {
+    logEvent('error', 'email_confirmation_resend_unavailable', { request_id: req.requestId, reason: 'email_delivery_not_configured' });
     return res.status(503).json({ error: 'Confirmation email is not configured on the library server. Please contact library staff.' });
   }
   const user = await one('users', db.from('users').select('id,username,email,is_active,email_verified').eq('username', username).eq('role', 'user').maybeSingle());
@@ -369,7 +389,7 @@ app.post('/api/password-reset/request/', resetLimiter, endpoint(async (req, res)
   const identifier = String(req.body.username || '').trim().slice(0, 254);
   const generic = { message: 'If the account details match, a reset code has been emailed. Check your inbox and spam folder.' };
   const localOnly = ['127.0.0.1','::1'].includes(req.ip) || String(req.ip || '').startsWith('::ffff:127.');
-  if ((!mailer || !mailFrom) && (process.env.NODE_ENV === 'production' || !localOnly)) {
+  if (!emailConfigured && (process.env.NODE_ENV === 'production' || !localOnly)) {
     return res.status(503).json({ error: 'Password reset email is not configured on the server. Please contact library staff.' });
   }
   const u = await findMemberForPasswordReset(identifier);
@@ -377,9 +397,9 @@ app.post('/api/password-reset/request/', resetLimiter, endpoint(async (req, res)
   const code = crypto.randomBytes(16).toString('hex').toUpperCase();
   await db.from('password_reset_tokens').update({ used_at: new Date().toISOString() }).eq('user_id', u.id).is('used_at', null);
   fail((await db.from('password_reset_tokens').insert({ user_id: u.id, token_hash: hashToken(code), expires_at: new Date(Date.now() + 900000).toISOString() })).error);
-  if (mailer && mailFrom) {
+  if (emailConfigured) {
     try {
-      await mailer.sendMail({ from: mailFrom, to: u.email, subject: 'Library password reset', text: `Your library password reset code is ${code}. It expires in 15 minutes.` });
+      await sendEmail({ from: mailFrom, to: u.email, subject: 'Library password reset', text: `Your library password reset code is ${code}. It expires in 15 minutes.` });
     } catch (error) {
       await db.from('password_reset_tokens').update({ used_at: new Date().toISOString() }).eq('user_id', u.id).is('used_at', null);
       logEvent('error', 'password_reset_email_failed', { request_id: req.requestId, error_code: error.code || 'unknown' });
@@ -676,7 +696,7 @@ app.get('/api/admin/audit/', requireAuth, requireRole('admin'), endpoint(async (
   const {data,error,count}=await query;fail(error);const records=await Promise.all((data||[]).map(async item=>({...item,actor:item.actor_user_id?safeUser(await getUser(item.actor_user_id)):null})));res.json({records,total:count||0,page,limit});
 }));
 app.get('/api/admin/settings/', requireAuth, requireRole('admin'), endpoint(async (_req,res)=>{const rows=await many('library_settings',db.from('library_settings').select('setting_key,setting_value,updated_at'));res.json({settings:Object.fromEntries(rows.map(row=>[row.setting_key,row.setting_value]))});}));
-app.get('/api/admin/security/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const [admins,me]=await Promise.all([many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true)),getUser(req.user.id)]);res.json({mfa_enabled:Boolean(me.admin_mfa_enabled),mfa_required:true,active_admins:admins.length,smtp_configured:Boolean(mailer&&mailFrom)});}));
+app.get('/api/admin/security/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const [admins,me]=await Promise.all([many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true)),getUser(req.user.id)]);res.json({mfa_enabled:Boolean(me.admin_mfa_enabled),mfa_required:true,active_admins:admins.length,smtp_configured:emailConfigured,email_provider:resendApiKey?'Resend API':mailer?'SMTP':'Not configured'});}));
 app.put('/api/admin/settings/:key/', requireAuth, requireRole('admin'), endpoint(async (req,res)=>{
   const key=String(req.params.key);if(!['branding','catalogue'].includes(key))return res.status(400).json({error:'That setting cannot be changed here.'});const value=req.body.value;if(!value||typeof value!=='object'||Array.isArray(value))return res.status(400).json({error:'Provide valid settings.'});
   let safe;if(key==='branding')safe={name:String(value.name||'').trim().slice(0,100),contact_email:String(value.contact_email||'').trim().slice(0,254),contact_phone:String(value.contact_phone||'').trim().slice(0,40),logo_url:String(value.logo_url||'').trim().slice(0,500)};
@@ -707,7 +727,7 @@ app.patch('/api/admin/users/:id/', requireAuth, requireRole('admin'), endpoint(a
   if(target.role==='admin'&&(role!=='admin'||!active)){const admins=await many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true));if(admins.length<=1)return res.status(400).json({error:'The last active administrator cannot be deactivated or demoted.'});}
   fail((await db.from('users').update({role,is_active:active}).eq('id',target.id)).error);await writeAudit(req,role!==target.role?'reader_role_changed':active!==target.is_active?(active?'reader_activated':'reader_deactivated'):'reader_updated','user',target.id,{role,is_active:active});res.json({user:safeUser(await getUser(target.id))});
 }));
-app.post('/api/admin/users/:id/recovery/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const user=await getUser(req.params.id);if(!user||user.role!=='user')return res.status(404).json({error:'Reader account not found.'});if(!user.email)return res.status(400).json({error:'This reader has no email address on the account.'});if(!mailer||!mailFrom)return res.status(503).json({error:'Account recovery email is not configured on the server.'});const code=crypto.randomBytes(16).toString('hex').toUpperCase();await db.from('password_reset_tokens').update({used_at:new Date().toISOString()}).eq('user_id',user.id).is('used_at',null);fail((await db.from('password_reset_tokens').insert({user_id:user.id,token_hash:hashToken(code),expires_at:new Date(Date.now()+900000).toISOString()})).error);await mailer.sendMail({from:mailFrom,to:user.email,subject:'Library account recovery',text:`A library administrator initiated account recovery for you. Your one-time reset code is ${code}. It expires in 15 minutes. If you did not expect this, contact the library.`});await writeAudit(req,'reader_recovery_initiated','user',user.id);res.json({ok:true,message:'A secure one-time recovery code was emailed to the reader.'});}));
+app.post('/api/admin/users/:id/recovery/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const user=await getUser(req.params.id);if(!user||user.role!=='user')return res.status(404).json({error:'Reader account not found.'});if(!user.email)return res.status(400).json({error:'This reader has no email address on the account.'});if(!emailConfigured)return res.status(503).json({error:'Account recovery email is not configured on the server.'});const code=crypto.randomBytes(16).toString('hex').toUpperCase();await db.from('password_reset_tokens').update({used_at:new Date().toISOString()}).eq('user_id',user.id).is('used_at',null);fail((await db.from('password_reset_tokens').insert({user_id:user.id,token_hash:hashToken(code),expires_at:new Date(Date.now()+900000).toISOString()})).error);await sendEmail({from:mailFrom,to:user.email,subject:'Library account recovery',text:`A library administrator initiated account recovery for you. Your one-time reset code is ${code}. It expires in 15 minutes. If you did not expect this, contact the library.`});await writeAudit(req,'reader_recovery_initiated','user',user.id);res.json({ok:true,message:'A secure one-time recovery code was emailed to the reader.'});}));
 app.delete('/api/admin/users/:id/', requireAuth, requireRole('admin'), endpoint(async (req, res) => { const u = await getUser(req.params.id); if (!u) return res.status(404).json({ error: 'User not found.' }); if (u.role !== 'user') return res.status(403).json({ error: 'Admin accounts cannot be removed here.' }); await writeAudit(req, 'member_deleted', 'user', u.id); fail((await db.from('users').delete().eq('id', u.id)).error); res.json({ ok: true, username: u.username }); }));
 function csvCell(value) { const raw = String(value ?? ''); const safe = /^[\s]*[=+@\-]/.test(raw) ? `'${raw}` : raw; return `"${safe.replaceAll('"','""')}"`; }
 app.get('/api/admin/reports/download/', requireAuth, requireRole('admin'), endpoint(async (_req, res) => { const users = await many('users', db.from('users').select('username,email,role,is_active,email_verified').order('username')); const csv = [['Username','Email','Role','Active','Email verified'], ...users.map((u) => [u.username,u.email,u.role,u.is_active,u.email_verified])].map((r) => r.map(csvCell).join(',')).join('\n'); await writeAudit(_req, 'member_report_exported', 'users', null, { record_count: users.length }); res.type('text/csv').attachment('library-members-report.csv').send(csv); }));
