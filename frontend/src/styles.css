@@ -1720,3 +1720,91 @@ input:focus, select:focus { border-color: #649184; box-shadow: 0 0 0 3px rgba(31
   .category-entity-row > div { grid-column: 1 / -1; }
   .category-entity-row button { min-width: 68px; }
 }
+
+/* Shared spacing and sizing for admin, reader, and catalogue screens. */
+body { line-height: 1.55; }
+.panel {
+  margin: 0;
+  padding: clamp(18px, 2.2vw, 30px);
+  width: 100%;
+}
+.panel h2, .panel h3, .panel h4 { line-height: 1.25; }
+.admin-section, .dashboard, .books-page, .recommendations-page { gap: clamp(16px, 2vw, 24px); }
+.section-heading { display: grid; gap: 8px; margin: 0 0 4px; }
+.section-heading h2, .section-heading h3, .section-heading p { margin: 0; }
+.section-heading h2 { font-size: clamp(1.45rem, 2vw, 1.9rem); }
+.section-heading > p, .section-heading > div > p:not(.eyebrow) { color: var(--library-muted); line-height: 1.6; max-width: 760px; }
+.section-heading-row { align-items: center; display: flex; flex-wrap: wrap; gap: 14px 22px; justify-content: space-between; }
+.admin-two-column, .analytics-stat-grid, .admin-overview-grid, .dashboard-lower {
+  display: grid;
+  gap: clamp(14px, 2vw, 22px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.analytics-stat-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); }
+.data-card {
+  background: var(--library-paper);
+  border: 1px solid var(--library-line);
+  border-radius: 16px;
+  box-shadow: 0 5px 18px rgba(39, 57, 45, .045);
+  min-width: 0;
+  padding: clamp(16px, 2vw, 22px);
+}
+.data-card h3 { color: var(--library-forest); margin: 0 0 12px; }
+.form-grid { align-content: start; gap: 16px; min-width: 0; }
+.form-grid label, .auth-form label, .filter-bar label, .filter-label {
+  color: #42534b;
+  font-size: .94rem;
+  font-weight: 700;
+  gap: 7px;
+  text-transform: none;
+}
+input, select, textarea {
+  background: #fffefa;
+  border: 1px solid #d6ddd1;
+  border-radius: 10px;
+  color: var(--library-ink);
+  font: inherit;
+  line-height: 1.4;
+  min-height: 44px;
+  padding: 9px 12px;
+  width: 100%;
+}
+textarea { min-height: 110px; resize: vertical; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--library-forest); min-height: auto; width: auto; }
+.button-row { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
+.button-row > button { min-height: 42px; }
+.metric-row { align-items: center; border-top: 1px solid var(--library-line); display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: space-between; min-width: 0; padding: 12px 0; }
+.metric-row:first-of-type { border-top: 0; }
+.metric-row > span { min-width: 0; overflow-wrap: anywhere; }
+.table { gap: 10px; min-width: 0; }
+.table .row {
+  background: #fffefa;
+  border-color: var(--library-line);
+  border-radius: 12px;
+  gap: 12px;
+  grid-template-columns: minmax(170px, 1.4fr) minmax(125px, 1fr) minmax(125px, .9fr) auto auto;
+  overflow-wrap: anywhere;
+  padding: 12px 14px;
+}
+.empty-state { background: #fffefa; border-color: #d9dfd3; line-height: 1.6; }
+button, .button-link { transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 2px; }
+@media (max-width: 900px) {
+  .admin-two-column, .admin-overview-grid, .dashboard-lower { grid-template-columns: minmax(0, 1fr); }
+  .table .row { grid-template-columns: minmax(0, 1.4fr) minmax(110px, 1fr) auto auto; }
+  .table .row > span:nth-child(3) { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .panel { border-radius: 16px; padding: 16px; }
+  .section-heading-row { align-items: flex-start; flex-direction: column; }
+  .section-heading-row > .button-row, .section-heading-row > button { width: 100%; }
+  .section-heading-row > .button-row > * { flex: 1 1 auto; }
+  .analytics-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .table .row { grid-template-columns: minmax(0, 1fr) auto; }
+  .table .row > span { grid-column: 1 / -1; }
+  .table .row > button { grid-row: auto; }
+  .form-grid { gap: 14px; }
+}
+@media (max-width: 380px) {
+  .analytics-stat-grid { grid-template-columns: minmax(0, 1fr); }
+}
