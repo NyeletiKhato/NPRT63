@@ -760,7 +760,7 @@ async function start() {
   }
   fail((await db.from('app_sessions').delete().lte('expires_at', new Date().toISOString())).error);
   const sessionCleanup = setInterval(() => db.from('app_sessions').delete().lte('expires_at', new Date().toISOString()).then(({ error }) => { if (error) logEvent('error', 'expired_session_cleanup_failed', { error_code: error.code || 'unknown' }); }), 60 * 60 * 1000); sessionCleanup.unref();
-  const server = app.listen(port, () => logEvent('info', 'server_started', { port, node_env: process.env.NODE_ENV || 'development' }));
+  const server = app.listen(port, '0.0.0.0', () => logEvent('info', 'server_started', { port, host: '0.0.0.0', node_env: process.env.NODE_ENV || 'development' }));
   server.headersTimeout = 15000;
   server.requestTimeout = 120000;
   server.keepAliveTimeout = 5000;
