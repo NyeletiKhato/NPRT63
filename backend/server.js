@@ -729,6 +729,12 @@ app.put('/api/admin/categories/:id/', requireAuth, requireRole('admin'), endpoin
   const {data,error}=await db.from('categories').update({name,description:String(req.body.description||'').trim(),is_active:req.body.is_active!==false}).eq('id',req.params.id).select().maybeSingle();if(error)return res.status(400).json({error:'Unable to update category.'});if(!data)return res.status(404).json({error:'Category not found.'});
   fail((await db.from('books').update({category:data.name}).eq('category_id',data.id)).error);await writeAudit(req,'category_updated','category',data.id);res.json({category:data});
 }));
+app.delete('/api/admin/categories/:id/', requireAuth, requireRole('admin'), endpoint(async (req,res)=>{
+  const category=await one('categories',db.from('categories').select('id,name,is_active').eq('id',req.params.id).maybeSingle());if(!category)return res.status(404).json({error:'Category not found.'});
+  if(category.is_active)return res.status(400).json({error:'Archive this category before deleting it.'});
+  const linkedBooks=await many('books',db.from('books').select('id').eq('category_id',category.id));if(linkedBooks.length)return res.status(400).json({error:'This category still has books. Remove or reassign them before deleting it.'});
+  await writeAudit(req,'category_deleted','category',category.id,{name:category.name});fail((await db.from('categories').delete().eq('id',category.id)).error);res.json({ok:true});
+}));
 app.get('/api/admin/authors/', requireAuth, requireRole('admin'), endpoint(async (_req,res)=>{
   const [authors,links]=await Promise.all([many('authors',db.from('authors').select('*').order('name')),many('book_authors',db.from('book_authors').select('author_id,book_id'))]);res.json({authors:authors.map((item)=>({...item,book_count:new Set(links.filter((link)=>link.author_id===item.id).map(link=>link.book_id)).size}))});
 }));
