@@ -319,7 +319,7 @@ app.post('/api/register/', registrationLimiter, endpoint(async (req, res) => {
   if (!username || username.length > 64 || !email || email.length > 254 || !password) return res.status(400).json({ error: 'Enter a username up to 64 characters, a valid email address, and a password.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Use a password between 8 and 72 UTF-8 bytes.' });
-  const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: true }).select().single();
+  const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: false }).select().single();
   if (error) {
     if (error.code === '23505') return res.status(409).json({ error: 'That username or email is already in use. Sign in or reset the password for the existing account.' });
     return res.status(400).json({ error: 'We could not create the account. Please check the details or try again.' });
