@@ -1808,6 +1808,37 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 380px) {
   .analytics-stat-grid { grid-template-columns: minmax(0, 1fr); }
 }
+.filter-bar {
+  align-items: end;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(240px, 1fr) minmax(170px, .5fr) auto;
+}
+.filter-bar > button { min-height: 44px; }
+.user-manager .user-row {
+  align-items: start;
+  grid-template-columns: minmax(0, 1.5fr) minmax(140px, .65fr) auto;
+}
+.admin-account-list { display: grid; gap: 12px; }
+.admin-account-row {
+  align-items: center;
+  background: #fffefa;
+  border: 1px solid var(--library-line);
+  border-radius: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  justify-content: space-between;
+  padding: 16px 18px;
+}
+.admin-account-row > div { display: grid; gap: 5px; min-width: 0; }
+.admin-account-row strong { color: var(--library-forest); font-size: 1.05rem; }
+.admin-account-row div > span, .admin-account-row small { color: var(--library-muted); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .filter-bar { grid-template-columns: minmax(0, 1fr); }
+  .user-manager .user-row { grid-template-columns: minmax(0, 1fr); }
+  .user-manager .user-row .button-row { align-items: stretch; }
+}
 .tabs {
   align-self: stretch;
   flex-wrap: wrap;
