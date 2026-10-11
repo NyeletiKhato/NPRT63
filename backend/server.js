@@ -269,6 +269,10 @@ app.post('/api/admin/password-recovery/', adminPasswordRecoveryLimiter, endpoint
   const email = normalizeEmail(req.body.email || '');
   const generic = { message: 'If that email belongs to an active administrator, a password-recovery link will be sent.' };
   if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter the assigned administrator email address.' });
+  if (!emailConfigured) {
+    logEvent('error', 'admin_password_recovery_failed', { request_id: req.requestId, error_code: 'email_delivery_not_configured' });
+    return res.status(503).json({ error: 'Administrator recovery email is not configured on the server. Please contact library staff.' });
+  }
   const pattern = email.replace(/[\\%_]/g, '\\$&');
   const matches = await many('users', db.from('users').select('id,role,is_active,auth_user_id').ilike('email', pattern).limit(2));
   const profile = matches.length === 1 ? matches[0] : null;
@@ -280,11 +284,26 @@ app.post('/api/admin/password-recovery/', adminPasswordRecoveryLimiter, endpoint
   }
   const redirect = new URL(publicAppUrl);
   redirect.searchParams.set('admin_recovery', '1');
-  const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: redirect.toString() });
-  if (error) {
-    logEvent('error', 'admin_password_recovery_failed', { request_id: req.requestId, error_code: error.code || error.name || 'unknown' });
-    await writeAudit(req, 'admin_password_recovery_failed', 'user', profile.id, { error_code: error.code || error.name || 'unknown' });
+  const { data: linkData, error: linkError } = await db.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo: redirect.toString() } });
+  const actionLink = linkData?.properties?.action_link;
+  if (linkError || !actionLink) {
+    const errorCode = linkError?.code || linkError?.name || 'recovery_link_missing';
+    logEvent('error', 'admin_password_recovery_failed', { request_id: req.requestId, error_code: errorCode });
+    await writeAudit(req, 'admin_password_recovery_failed', 'user', profile.id, { error_code: errorCode });
     return res.status(503).json({ error: 'Password recovery is temporarily unavailable. Please try again later or contact library staff.' });
+  }
+  try {
+    await sendEmail({
+      from: mailFrom,
+      to: email,
+      subject: 'Library administrator password recovery',
+      text: `A password reset was requested for your library administrator account. Use this secure link to choose a new password:\n\n${actionLink}\n\nIf you did not request this, ignore this email or contact library staff.`,
+    });
+  } catch (error) {
+    const errorCode = error.code || error.name || 'email_delivery_failed';
+    logEvent('error', 'admin_password_recovery_failed', { request_id: req.requestId, error_code: errorCode });
+    await writeAudit(req, 'admin_password_recovery_failed', 'user', profile.id, { error_code: errorCode });
+    return res.status(503).json({ error: 'The recovery link could not be delivered. Please try again later or contact library staff.' });
   }
   await writeAudit(req, 'admin_password_recovery_requested', 'user', profile.id);
   res.json(generic);
