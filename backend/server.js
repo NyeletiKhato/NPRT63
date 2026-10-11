@@ -347,16 +347,18 @@ app.get('/api/email/verify/', endpoint(async (req, res) => {
   res.redirect(303, portalUrl);
 }));
 app.post('/api/email/resend-confirmation/', verificationResendLimiter, endpoint(async (req, res) => {
-  const username = String(req.body.username || '').trim().slice(0, 64);
-  const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
-  const generic = { message: 'If an unconfirmed account matches those details, a confirmation email will be sent.' };
-  if (!username || !email) return res.status(400).json({ error: 'Enter both the username and the email address used to create the account.' });
+  const identifier = String(req.body.identifier || req.body.username || req.body.email || '').trim().slice(0, 254);
+  const generic = { message: 'If an unconfirmed account matches that username or email, a confirmation email will be sent.' };
+  if (!identifier) return res.status(400).json({ error: 'Enter your username or registered email address.' });
   if (!emailConfigured) {
     logEvent('error', 'email_confirmation_resend_unavailable', { request_id: req.requestId, reason: 'email_delivery_not_configured' });
     return res.status(503).json({ error: 'Confirmation email is not configured on the library server. Please contact library staff.' });
   }
-  const user = await one('users', db.from('users').select('id,username,email,is_active,email_verified').eq('username', username).eq('role', 'user').maybeSingle());
-  if (!user || !user.is_active || user.email_verified || String(user.email || '').toLowerCase() !== email) return res.json(generic);
+  const column = identifier.includes('@') ? 'email' : 'username';
+  const pattern = identifier.replace(/[\\%_]/g, '\\$&');
+  const matches = await many('users', db.from('users').select('id,username,email,is_active,email_verified').ilike(column, pattern).eq('role', 'user').limit(2));
+  const user = matches.length === 1 ? matches[0] : null;
+  if (!user || !user.is_active || user.email_verified || !user.email) return res.json(generic);
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashToken(token);
   fail((await db.from('email_verification_tokens').insert({ user_id: user.id, token_hash: tokenHash, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })).error);

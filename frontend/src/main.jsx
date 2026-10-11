@@ -490,7 +490,7 @@ function EntryScreen({ setAuthScreen }) {
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
   const [resendMode, setResendMode] = useState(false);
-  const [resendAccount, setResendAccount] = useState({ username: '', email: '' });
+  const [resendIdentifier, setResendIdentifier] = useState('');
   const [mfaStep, setMfaStep] = useState('credentials');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaUrl, setMfaUrl] = useState('');
@@ -499,7 +499,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
     event.preventDefault();
     try {
       if (resendMode) {
-        const result = await api.post('/api/email/resend-confirmation/', resendAccount);
+        const result = await api.post('/api/email/resend-confirmation/', { identifier: resendIdentifier });
         showMessage(result.message);
         setResendMode(false);
         return;
@@ -543,9 +543,8 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       <form className="panel auth-form" onSubmit={submit}>
         <h3>{mfaStep === 'setup' ? 'Set up authenticator' : mfaStep === 'challenge' ? 'Admin verification' : mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
         {!mfaFlow ? resendMode ? <>
-          <p>Enter both the username and the email address you used to register. If no message arrives, check your spam folder and make sure both details match your account.</p>
-          <label>Username<input autoComplete="username" value={resendAccount.username} onChange={(event) => setResendAccount({ ...resendAccount, username: event.target.value })} required /></label>
-          <label>Registered email<input type="email" autoComplete="email" placeholder="you@example.com" value={resendAccount.email} onChange={(event) => setResendAccount({ ...resendAccount, email: event.target.value })} required /></label>
+          <p>Enter your username or the email address you used to register. If no message arrives, check your spam folder.</p>
+          <label>Username or email<input autoComplete="username" placeholder="Username or registered email" value={resendIdentifier} onChange={(event) => setResendIdentifier(event.target.value)} required /></label>
           <button className="primary" type="submit">Send confirmation email</button>
           <p className="auth-switch"><button type="button" onClick={() => setResendMode(false)}>Return to sign in</button></p>
         </> : <>
@@ -558,7 +557,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
           <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required /></label>
           <button className="primary" type="submit">{mfaStep === 'setup' ? 'Enable and sign in' : 'Verify and sign in'}</button>
         </>}
-        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' && !resendMode ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch"><button type="button" onClick={() => { setResendAccount({ username: form.username, email: '' }); setResendMode(true); }}>Resend confirmation email</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
+        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' && !resendMode ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch"><button type="button" onClick={() => { setResendIdentifier(form.username); setResendMode(true); }}>Resend confirmation email</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
       </form>
     </section>
   );
