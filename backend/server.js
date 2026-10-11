@@ -130,6 +130,7 @@ const loginIpLimiter = rateLimit((req) => ['login-ip:' + ipKey(req)], 40, 900, '
 const loginCredentialLimiter = rateLimit((req) => ['login-user:' + String(req.body.username || '').trim().toLowerCase()], 8, 900, 'Too many sign-in attempts for this account. Wait 15 minutes before trying again.');
 const registrationLimiter = rateLimit((req) => ['register-ip:' + ipKey(req)], 20, 3600, 'Too many accounts were created from this connection. Try again later.');
 const verificationResendLimiter = rateLimit((req) => ['verify-resend-ip:' + ipKey(req), 'verify-resend-user:' + String(req.body.identifier || req.body.username || req.body.email || '').trim().toLowerCase()], 3, 900, 'Too many confirmation requests. Wait 15 minutes and try again.');
+const adminPasswordRecoveryLimiter = rateLimit((req) => ['admin-password-recovery-ip:' + ipKey(req), 'admin-password-recovery-email:' + normalizeEmail(req.body.email || '')], 5, 900, 'Too many administrator recovery requests. Wait 15 minutes and try again.');
 const newsletterLimiter = rateLimit((req) => ['newsletter-ip:' + ipKey(req)], 10, 3600, 'Too many newsletter requests. Try again later.');
 const resetLimiter = rateLimit((req) => ['reset-ip:' + ipKey(req), 'reset-user:' + String(req.body.username || '').trim().toLowerCase()], 5, 900, 'Too many password reset attempts. Wait 15 minutes and try again.');
 const searchLimiter = rateLimit((req) => ['search-user:' + String(req.session?.userId || ipKey(req))], 120, 60, 'Too many catalogue searches. Please wait a moment and try again.');
@@ -264,6 +265,30 @@ app.get('/api/session/', endpoint(async (req, res) => {
 }));
 if (process.env.NODE_ENV !== 'production') app.get('/api/network-address/', (_req, res) => { const ips = Object.values(os.networkInterfaces()).flatMap((x) => x || []).filter((x) => x.family === 'IPv4' && !x.internal).map((x) => x.address); res.json({ address: ips[0] || null }); });
 app.post('/api/newsletter/subscribe/', newsletterLimiter, endpoint(async (req, res) => { const email = String(req.body.email || '').trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' }); const { error } = await db.from('newsletter_subscriptions').upsert({ email }, { onConflict: 'email', ignoreDuplicates: true }); fail(error); res.status(201).json({ message: 'You are subscribed to library updates.' }); }));
+app.post('/api/admin/password-recovery/', adminPasswordRecoveryLimiter, endpoint(async (req, res) => {
+  const email = normalizeEmail(req.body.email || '');
+  const generic = { message: 'If that email belongs to an active administrator, a password-recovery link will be sent.' };
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter the assigned administrator email address.' });
+  const pattern = email.replace(/[\\%_]/g, '\\$&');
+  const matches = await many('users', db.from('users').select('id,role,is_active,auth_user_id').ilike('email', pattern).limit(2));
+  const profile = matches.length === 1 ? matches[0] : null;
+  if (!profile || profile.role !== 'admin' || !profile.is_active || !profile.auth_user_id) return res.json(generic);
+  const { data: authRecord, error: authError } = await db.auth.admin.getUserById(profile.auth_user_id);
+  if (authError || !authRecord?.user || !(authRecord.user.email_confirmed_at || authRecord.user.confirmed_at)) {
+    await writeAudit(req, 'admin_password_recovery_not_sent', 'user', profile.id, { reason: authError ? 'auth_identity_lookup_failed' : 'identity_not_confirmed' });
+    return res.json(generic);
+  }
+  const redirect = new URL(publicAppUrl);
+  redirect.searchParams.set('admin_recovery', '1');
+  const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: redirect.toString() });
+  if (error) {
+    logEvent('error', 'admin_password_recovery_failed', { request_id: req.requestId, error_code: error.code || error.name || 'unknown' });
+    await writeAudit(req, 'admin_password_recovery_failed', 'user', profile.id, { error_code: error.code || error.name || 'unknown' });
+    return res.status(503).json({ error: 'Password recovery is temporarily unavailable. Please try again later or contact library staff.' });
+  }
+  await writeAudit(req, 'admin_password_recovery_requested', 'user', profile.id);
+  res.json(generic);
+}));
 app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (req, res) => {
   const username = String(req.body.username || '').trim().slice(0, 100);
   const requestedRole = req.body.role === 'admin' ? 'admin' : 'user';

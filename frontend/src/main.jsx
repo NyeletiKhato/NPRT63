@@ -186,17 +186,18 @@ function App() {
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
+    const adminSetupFlow = query.get('admin_setup') === '1' || query.get('admin_recovery') === '1';
     if (query.get('error') || query.get('error_description')) {
-      setAuthScreen(query.get('admin_setup') === '1' ? 'login-admin' : 'entry');
-      setMessage(query.get('admin_setup') === '1' ? 'This invitation link is invalid or expired. Contact the library operator to send a new invitation.' : 'This sign-in link is invalid or expired. Request a new email and try again.');
+      setAuthScreen(adminSetupFlow ? 'login-admin' : 'entry');
+      setMessage(query.get('admin_recovery') === '1' ? 'This recovery link is invalid or expired. Request a new password-recovery email.' : query.get('admin_setup') === '1' ? 'This invitation link is invalid or expired. Contact the library operator to send a new invitation.' : 'This sign-in link is invalid or expired. Request a new email and try again.');
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (query.get('email_confirmed') === '1') {
       setAuthScreen('login-user');
       setMessage('Email confirmed. You can now sign in.');
       window.history.replaceState({}, document.title, window.location.pathname);
-    } else if (query.get('admin_setup') === '1') {
+    } else if (adminSetupFlow) {
       setAuthScreen('login-admin');
-      setMessage('Invitation opened. Complete account setup to continue.');
+      setMessage(query.get('admin_recovery') === '1' ? 'Recovery link opened. Set a new password to continue.' : 'Invitation opened. Complete account setup to continue.');
     }
     (async () => {
       const { data: authData } = await supabaseAuth?.auth.getSession() || { data: { session: null } };
@@ -503,7 +504,7 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
   const [factor, setFactor] = useState(null);
   const [qr, setQr] = useState('');
   const [busy, setBusy] = useState(false);
-  const invitation = new URLSearchParams(window.location.search).get('admin_setup') === '1';
+  const setupFlow = ['admin_setup', 'admin_recovery'].some((key) => new URLSearchParams(window.location.search).get(key) === '1');
 
   async function finishAdminLogin() {
     const active = await api.get('/api/session/');
@@ -527,15 +528,15 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
     setFactor(enrolled); setQr(enrolled.totp?.uri || ''); setStep('setup');
   }
 
-  async function continueWithSession(session, fromInvitation = false) {
+  async function continueWithSession(session, fromSetupLink = false) {
     let identity = await api.get('/api/session/');
-    if (!identity.adminSetupRequired && fromInvitation) {
+    if (!identity.adminSetupRequired && fromSetupLink) {
       await new Promise((resolve) => window.setTimeout(resolve, 1200));
       identity = await api.get('/api/session/');
     }
     if (!identity.adminSetupRequired) throw new Error('This Supabase account has not been provisioned as an active administrator.');
     setEmail(identity.adminEmail || session.user.email || '');
-    if (fromInvitation) { setStep('password-setup'); return; }
+    if (fromSetupLink) { setStep('password-setup'); return; }
     if (identity.user) { await finishAdminLogin(); return; }
     await prepareMfa();
   }
@@ -544,7 +545,7 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
     if (!supabaseAuth) return;
     supabaseAuth.auth.getSession().then(({ data }) => {
       if (!data.session) return;
-      continueWithSession(data.session, invitation).catch((error) => showMessage(error.message || 'Administrator setup could not be verified.'));
+      continueWithSession(data.session, setupFlow).catch((error) => showMessage(error.message || 'Administrator setup could not be verified.'));
     });
   // The invitation is fixed for this rendered login screen.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -575,6 +576,20 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
     finally { setBusy(false); }
   }
 
+  async function requestPasswordRecovery() {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      showMessage('Enter your assigned administrator email first.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.post('/api/admin/password-recovery/', { email: normalizedEmail });
+      showMessage(data.message || 'If that email belongs to an active administrator, a password-recovery link will be sent.');
+    } catch (error) { showMessage(error.message || 'Password recovery could not be requested.'); }
+    finally { setBusy(false); }
+  }
+
   async function cancel() {
     try { await supabaseAuth?.auth.signOut({ scope: 'local' }); } catch {}
     setStep('credentials'); setPassword(''); setCode(''); setFactor(null); setQr('');
@@ -584,16 +599,17 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
     <section className="auth-page">
       <div className="auth-copy">
         <button type="button" className="link-button" onClick={() => setAuthScreen('entry')}>Back to portal</button>
-        <div className="auth-copy-layout"><div className="auth-copy-text"><p className="eyebrow">Library team</p><h2>{step === 'password-setup' ? 'Finish setting up your account.' : step === 'setup' ? 'Secure your administrator account.' : step === 'challenge' ? 'Verify your identity.' : 'Administrator sign in.'}</h2><p>{step === 'password-setup' ? 'Choose a password for your invited administrator account.' : step === 'setup' ? 'Scan the code with an authenticator app, then enter its six-digit code.' : step === 'challenge' ? 'Enter the current code from your authenticator app.' : 'Use the assigned email and password from your Supabase Auth invitation.'}</p></div><img className="auth-art" src={libraryBooks} alt="" /></div>
+        <div className="auth-copy-layout"><div className="auth-copy-text"><p className="eyebrow">Library team</p><h2>{step === 'password-setup' ? 'Choose a new password.' : step === 'setup' ? 'Secure your administrator account.' : step === 'challenge' ? 'Verify your identity.' : 'Administrator sign in.'}</h2><p>{step === 'password-setup' ? 'Set a new password for your administrator account.' : step === 'setup' ? 'Scan the code with an authenticator app, then enter its six-digit code.' : step === 'challenge' ? 'Enter the current code from your authenticator app.' : 'Use the assigned email and password for your administrator account.'}</p></div><img className="auth-art" src={libraryBooks} alt="" /></div>
       </div>
       <form className="panel auth-form" onSubmit={submit}>
         <h3>{step === 'password-setup' ? 'Set your password' : step === 'setup' ? 'Enroll authenticator' : step === 'challenge' ? 'Authenticator verification' : 'Staff sign in'}</h3>
         {step === 'credentials' && <label>Assigned email<input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>}
-        {step === 'password-setup' && <p className="auth-switch">Invitation for <strong>{email}</strong></p>}
+        {step === 'password-setup' && <p className="auth-switch">Administrator account: <strong>{email}</strong></p>}
         {(step === 'credentials' || step === 'password-setup') && <label>{step === 'password-setup' ? 'New password' : 'Password'}<input type="password" autoComplete={step === 'password-setup' ? 'new-password' : 'current-password'} minLength={step === 'password-setup' ? 12 : undefined} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
         {step === 'setup' && qr && <div className="mfa-setup-code"><QRCodeSVG value={qr} size={190} level="M" includeMargin /><p>Scan this with Google Authenticator, Microsoft Authenticator, or another TOTP app.</p></div>}
         {(step === 'setup' || step === 'challenge') && <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label>}
         <button className="primary" type="submit" disabled={busy}>{busy ? 'Please wait…' : step === 'credentials' ? 'Continue' : step === 'password-setup' ? 'Save password' : step === 'setup' ? 'Verify and enable MFA' : 'Verify and sign in'}</button>
+        {step === 'credentials' && <p className="auth-switch"><button type="button" disabled={busy} onClick={requestPasswordRecovery}>Forgot admin password?</button></p>}
         {step !== 'credentials' && <p className="auth-switch"><button type="button" onClick={cancel}>Cancel setup</button></p>}
       </form>
     </section>
