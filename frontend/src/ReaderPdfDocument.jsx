@@ -1,18 +1,120 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-export default function ReaderPdfDocument({bytes,page,zoom,fitMode,onPageCount,onPageChange,onError}){
-  const [document,setDocument]=useState(null),[pdfPage,setPdfPage]=useState(null),[renderError,setRenderError]=useState(''),[searchTerm,setSearchTerm]=useState(''),[searching,setSearching]=useState(false),[matches,setMatches]=useState([]),[dimensions,setDimensions]=useState({width:0,height:0});
-  const canvasRef=useRef(null),textLayerRef=useRef(null),containerRef=useRef(null);
-  useEffect(()=>{let active=true;setRenderError('');const task=getDocument({data:bytes});task.promise.then(pdf=>{if(!active){pdf.destroy();return;}setDocument(pdf);onPageCount(pdf.numPages);}).catch(error=>{if(active){const message=error?.message||'The PDF could not be rendered.';setRenderError(message);onError(message);}});return()=>{active=false;task.destroy().catch(()=>{});};},[bytes,onPageCount,onError]);
-  useEffect(()=>{const element=containerRef.current;if(!element)return;const measure=()=>setDimensions({width:element.clientWidth,height:element.clientHeight});measure();if(typeof ResizeObserver==='undefined'){window.addEventListener('resize',measure);return()=>window.removeEventListener('resize',measure);}const observer=new ResizeObserver(measure);observer.observe(element);return()=>observer.disconnect();},[]);
-  useEffect(()=>{let active=true;if(!document)return;document.getPage(page).then(current=>{if(active)setPdfPage(current);}).catch(error=>{if(active){const message=error?.message||'This PDF page could not be opened.';setRenderError(message);onError(message);}});return()=>{active=false;};},[document,page,onError]);
-  const effectiveScale=useMemo(()=>{if(!pdfPage||!fitMode)return zoom;const base=pdfPage.getViewport({scale:1});const widthScale=(Math.max(260,dimensions.width-32))/base.width;if(fitMode==='width')return Math.max(.35,Math.min(3,widthScale));const heightScale=(Math.max(320,dimensions.height-28))/base.height;return Math.max(.35,Math.min(3,widthScale,heightScale));},[pdfPage,fitMode,zoom,dimensions]);
-  useEffect(()=>{if(!pdfPage||!canvasRef.current||!textLayerRef.current)return;let active=true,task,textLayer;setRenderError('');const canvas=canvasRef.current;const outputScale=window.devicePixelRatio||1;const viewport=pdfPage.getViewport({scale:effectiveScale});canvas.width=Math.floor(viewport.width*outputScale);canvas.height=Math.floor(viewport.height*outputScale);canvas.style.width=`${Math.floor(viewport.width)}px`;canvas.style.height=`${Math.floor(viewport.height)}px`;const layer=textLayerRef.current;layer.replaceChildren();layer.style.width=`${Math.floor(viewport.width)}px`;layer.style.height=`${Math.floor(viewport.height)}px`;layer.style.setProperty('--scale-factor',String(effectiveScale));layer.style.setProperty('--total-scale-factor',String(effectiveScale));layer.style.setProperty('--user-unit','1');layer.style.setProperty('--scale-round-x','1px');layer.style.setProperty('--scale-round-y','1px');task=pdfPage.render({canvas,viewport,transform:outputScale!==1?[outputScale,0,0,outputScale,0,0]:null});pdfPage.getTextContent().then(textContent=>{if(!active)return;textLayer=new TextLayer({textContentSource:textContent,container:layer,viewport});return textLayer.render();}).catch(error=>{if(active&&error?.name!=='RenderingCancelledException'){const message=error?.message||'Text selection is unavailable for this page.';setRenderError(message);}});task.promise.catch(error=>{if(active&&error?.name!=='RenderingCancelledException'){const message=error?.message||'The PDF page could not be rendered.';setRenderError(message);onError(message);}});return()=>{active=false;task?.cancel();textLayer?.cancel();};},[pdfPage,effectiveScale,onError]);
-  async function search(event){event.preventDefault();const term=searchTerm.trim().toLocaleLowerCase();if(!document||!term)return;setSearching(true);setMatches([]);try{const found=[];for(let pageNumber=1;pageNumber<=document.numPages;pageNumber++){const item=await document.getPage(pageNumber);const content=await item.getTextContent();const text=content.items.map(part=>part.str||'').join(' ').toLocaleLowerCase();if(text.includes(term))found.push(pageNumber);}setMatches(found);if(found.length)onPageChange(found[0]);}catch(error){setRenderError(error?.message||'Document search failed.');}finally{setSearching(false);}}
-  return <div className="pdf-reader-content"><form className="pdf-search" onSubmit={search}><label>Find in this book<input value={searchTerm} onChange={event=>setSearchTerm(event.target.value)} placeholder="Search text in the PDF"/></label><button className="secondary" disabled={searching||!searchTerm.trim()}>{searching?'Searching…':'Search'}</button>{searching&&<span>Searching pages…</span>}{matches.length>0&&<span>{matches.length} page{matches.length===1?'':'s'} found</span>}{matches.length===0&&searchTerm&&!searching&&<span>Search to find matches</span>}</form>{matches.length>0&&<div className="pdf-search-matches">{matches.slice(0,30).map(number=><button type="button" key={number} className="link-button" onClick={()=>onPageChange(number)}>Page {number}</button>)}</div>}{renderError&&<p className="reader-render-error" role="alert">{renderError}</p>}<div className="pdf-document-scroll" ref={containerRef}>{document?<div className="pdf-page-container" style={{width:pdfPage?`${pdfPage.getViewport({scale:effectiveScale}).width}px`:undefined,height:pdfPage?`${pdfPage.getViewport({scale:effectiveScale}).height}px`:undefined}}><canvas ref={canvasRef} aria-label={`PDF page ${page} of ${document.numPages}`}/><div ref={textLayerRef} className="textLayer"/></div>:<p className="loading-state">Preparing PDF viewer…</p>}</div></div>;
+function PdfPage({ pdf, number, zoom, fitMode, width, onError }) {
+  const shell = useRef(null);
+  const canvas = useRef(null);
+  const textLayer = useRef(null);
+  const [visible, setVisible] = useState(false);
+  const [page, setPage] = useState(null);
+  const [size, setSize] = useState({ width: 0, height: 900 });
+
+  useEffect(() => {
+    const node = shell.current;
+    if (!node) return undefined;
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { rootMargin: '1000px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible || page) return undefined;
+    let active = true;
+    pdf.getPage(number).then(value => { if (active) setPage(value); }).catch(error => { if (active) onError(error?.message || 'A PDF page could not be opened.'); });
+    return () => { active = false; };
+  }, [visible, page, pdf, number, onError]);
+
+  useEffect(() => {
+    if (!page) return;
+    const base = page.getViewport({ scale: 1 });
+    const fitWidth = Math.max(260, width - 36) / base.width;
+    const fitPage = Math.min(fitWidth, Math.max(320, window.innerHeight * .72) / base.height);
+    const scale = Math.max(.35, Math.min(3, fitMode === 'width' ? fitWidth : fitMode === 'page' ? fitPage : zoom));
+    const viewport = page.getViewport({ scale });
+    setSize({ width: viewport.width, height: viewport.height });
+    if (!visible || !canvas.current || !textLayer.current) return undefined;
+    let active = true;
+    let renderTask;
+    let layerTask;
+    const target = canvas.current;
+    const outputScale = window.devicePixelRatio || 1;
+    target.width = Math.floor(viewport.width * outputScale);
+    target.height = Math.floor(viewport.height * outputScale);
+    target.style.width = `${Math.floor(viewport.width)}px`;
+    target.style.height = `${Math.floor(viewport.height)}px`;
+    const layer = textLayer.current;
+    layer.replaceChildren();
+    Object.assign(layer.style, { width: `${Math.floor(viewport.width)}px`, height: `${Math.floor(viewport.height)}px` });
+    layer.style.setProperty('--scale-factor', String(scale));
+    layer.style.setProperty('--total-scale-factor', String(scale));
+    layer.style.setProperty('--user-unit', '1');
+    layer.style.setProperty('--scale-round-x', '1px');
+    layer.style.setProperty('--scale-round-y', '1px');
+    renderTask = page.render({ canvas: target, viewport, transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null });
+    page.getTextContent().then(content => {
+      if (!active) return;
+      layerTask = new TextLayer({ textContentSource: content, container: layer, viewport });
+      return layerTask.render();
+    }).catch(error => { if (active && error?.name !== 'RenderingCancelledException') onError(error?.message || 'PDF text selection is unavailable.'); });
+    renderTask.promise.catch(error => { if (active && error?.name !== 'RenderingCancelledException') onError(error?.message || 'A PDF page could not be rendered.'); });
+    return () => { active = false; renderTask?.cancel(); layerTask?.cancel(); };
+  }, [page, visible, width, zoom, fitMode, onError]);
+
+  return <div ref={shell} className="pdf-page-shell" data-page-number={number} style={{ width: size.width || 'min(100%, 850px)', minHeight: size.height }}><div className="pdf-page-container" style={{ width: size.width || '100%', height: size.height }}>{visible && page ? <><canvas ref={canvas} aria-label={`PDF page ${number}`}/><div ref={textLayer} className="textLayer"/></> : <span className="pdf-page-placeholder">Page {number}</span>}</div></div>;
+}
+
+export default function ReaderPdfDocument({ bytes, page, zoom, fitMode, onPageChange, onError }) {
+  const [pdf, setPdf] = useState(null);
+  const [width, setWidth] = useState(850);
+  const [renderError, setRenderError] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [matches, setMatches] = useState([]);
+  const content = useRef(null);
+  useEffect(() => {
+    let active = true;
+    const task = getDocument({ data: bytes });
+    task.promise.then(value => { if (active) setPdf(value); else value.destroy(); }).catch(error => { if (active) { const message = error?.message || 'The PDF could not be rendered.'; setRenderError(message); onError(message); } });
+    return () => { active = false; task.destroy().catch(() => {}); };
+  }, [bytes, onError]);
+  useEffect(() => {
+    const node = content.current;
+    if (!node) return undefined;
+    const measure = () => setWidth(node.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!pdf || !page) return;
+    content.current?.querySelector(`[data-page-number="${page}"]`)?.scrollIntoView({ block: 'start' });
+  }, [pdf]);
+  async function search(event) {
+    event.preventDefault();
+    const term = searchTerm.trim().toLocaleLowerCase();
+    if (!pdf || !term) return;
+    setSearching(true); setMatches([]);
+    try {
+      const found = [];
+      for (let number = 1; number <= pdf.numPages; number++) {
+        const current = await pdf.getPage(number);
+        const text = (await current.getTextContent()).items.map(item => item.str || '').join(' ').toLocaleLowerCase();
+        if (text.includes(term)) found.push(number);
+      }
+      setMatches(found);
+      if (found.length) onPageChange(found[0]);
+    } catch (error) { setRenderError(error?.message || 'Document search failed.'); }
+    finally { setSearching(false); }
+  }
+  return <div className="pdf-reader-content" ref={content}>
+    <form className="pdf-search" onSubmit={search}><label>Find in this book<input value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="Search text in the PDF"/></label><button className="secondary" disabled={searching || !searchTerm.trim()}>{searching ? 'Searching…' : 'Search'}</button>{searching && <span>Searching pages…</span>}{matches.length > 0 && <span>{matches.length} page{matches.length === 1 ? '' : 's'} found</span>}{matches.length === 0 && searchTerm && !searching && <span>Search to find matches</span>}</form>
+    {matches.length > 0 && <div className="pdf-search-matches">{matches.slice(0, 30).map(number => <button type="button" key={number} className="link-button" onClick={() => onPageChange(number)}>Page {number}</button>)}</div>}
+    {renderError && <p className="reader-render-error" role="alert">{renderError}</p>}
+    <div className="pdf-document-scroll">{pdf ? Array.from({ length: pdf.numPages }, (_, index) => <PdfPage key={`${bytes.length}-${index + 1}`} pdf={pdf} number={index + 1} zoom={zoom} fitMode={fitMode} width={width} onError={onError}/>) : <p className="loading-state">Preparing PDF viewer…</p>}</div>
+  </div>;
 }
