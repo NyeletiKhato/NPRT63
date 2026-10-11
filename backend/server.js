@@ -286,6 +286,10 @@ app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (
     await writeAudit(req, 'login_denied', 'user', user.id);
     return res.status(400).json({ error: 'Invalid username or password.' });
   }
+  if (!user.email_verified) {
+    await writeAudit(req, 'login_denied_unverified_email', 'user', user.id);
+    return res.status(403).json({ error: 'Confirm your email before signing in. Check your inbox, or resend the confirmation email.' });
+  }
   if (user.password_hash.startsWith('pbkdf2_sha256$')) fail((await db.from('users').update({ password_hash: bcrypt.hashSync(password, 12) }).eq('id', user.id)).error);
   await clearRateLimits(['login-ip:' + ipKey(req), 'login-user:' + username.toLowerCase()]);
   await regenerateSession(req); req.session.userId = user.id; req.session.authenticatedAt = Date.now(); req.session.csrfToken = newCsrfToken();
@@ -303,12 +307,26 @@ app.post('/api/register/', registrationLimiter, endpoint(async (req, res) => {
   if (!username || username.length > 64 || !email || email.length > 254 || !password) return res.status(400).json({ error: 'Enter a username up to 64 characters, a valid email address, and a password.' });
   if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Use a password between 8 and 72 UTF-8 bytes.' });
+  if (!emailConfigured) return res.status(503).json({ error: 'Email confirmation is not configured on the library server. Please contact library staff before creating an account.' });
   const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: false }).select().single();
   if (error) {
     if (error.code === '23505') return res.status(409).json({ error: 'That username or email is already in use. Sign in or reset the password for the existing account.' });
     return res.status(400).json({ error: 'We could not create the account. Please check the details or try again.' });
   }
-  await writeAudit({ ...req, user }, 'member_registered', 'user', user.id); res.status(201).json({ account_created: true, message: 'Account created. You can sign in now.' });
+  await writeAudit({ ...req, user }, 'member_registered', 'user', user.id);
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashToken(token);
+  fail((await db.from('email_verification_tokens').insert({ user_id: user.id, token_hash: tokenHash, expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })).error);
+  try {
+    await sendVerificationEmail(user, token);
+  } catch (error) {
+    await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('token_hash', tokenHash);
+    logEvent('error', 'member_registration_confirmation_failed', { request_id: req.requestId, error_code: error.code || 'unknown' });
+    await writeAudit({ ...req, user }, 'email_verification_send_failed', 'user', user.id);
+    return res.status(503).json({ error: 'Your account was created, but the confirmation email could not be delivered. Use “Resend confirmation email” on the sign-in page or contact library staff.' });
+  }
+  await writeAudit({ ...req, user }, 'email_verification_sent', 'user', user.id);
+  res.status(201).json({ account_created: true, message: 'Account created. Check your inbox for a confirmation link before signing in.' });
 }));
 app.get('/api/email/verify/', endpoint(async (req, res) => {
   const token = String(req.query.token || '');

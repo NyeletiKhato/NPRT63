@@ -351,6 +351,9 @@ function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, set
   if (authScreen === 'password-reset') {
     return <PasswordResetPanel api={api} setAuthScreen={setAuthScreen} showMessage={showMessage} />;
   }
+  if (authScreen === 'resend-confirmation') {
+    return <ResendConfirmationPanel api={api} setAuthScreen={setAuthScreen} showMessage={showMessage} />;
+  }
   return <EntryScreen setAuthScreen={setAuthScreen} />;
 }
 
@@ -606,8 +609,9 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       let data;
       if (mode === 'register') {
         const registration = await api.post('/api/register/', form);
-        if (!registration.account_created) { showMessage(registration.message || 'You can now sign in.'); setAuthScreen('login-user'); return; }
-        data = await api.post('/api/login/', { ...form, role: 'user' });
+        showMessage(registration.message || 'Account created. Check your inbox for a confirmation link before signing in.');
+        setAuthScreen('login-user');
+        return;
       } else {
         data = await api.post('/api/login/', { ...form, role });
       }
@@ -640,7 +644,35 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
         <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
         <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>
-        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></>}
+        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('resend-confirmation')}>Didn't receive your confirmation email?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></>}
+      </form>
+    </section>
+  );
+}
+
+function ResendConfirmationPanel({ api, setAuthScreen, showMessage }) {
+  const [identifier, setIdentifier] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await api.post('/api/email/resend-confirmation/', { identifier });
+      showMessage(data.message || 'If an unconfirmed account matches, a confirmation email will be sent.');
+      setAuthScreen('login-user');
+    } catch (error) { showMessage(error.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <section className="auth-page">
+      <div className="auth-copy">
+        <button type="button" className="link-button" onClick={() => setAuthScreen('login-user')}>Back to login</button>
+        <div className="auth-copy-layout"><div className="auth-copy-text"><p className="eyebrow">Email confirmation</p><h2>Check your inbox.</h2><p>Enter the username or email address used to register. We’ll send a fresh confirmation link if the account still needs confirmation.</p></div><img className="auth-art" src={libraryBooks} alt="" /></div>
+      </div>
+      <form className="panel auth-form" onSubmit={submit}>
+        <h3>Resend confirmation email</h3>
+        <label>Username or email<input autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>
+        <button className="primary" type="submit" disabled={busy}>{busy ? 'Please wait…' : 'Send confirmation link'}</button>
       </form>
     </section>
   );
@@ -862,7 +894,7 @@ function UserManager({ api, reload, showMessage }) {
     <div className="section-heading"><div><p className="eyebrow">Reader directory</p><h2>Reader management</h2><p>Search accounts, review registration dates, and update access. Passwords are never displayed.</p></div></div>
     <form className="filter-bar" onSubmit={(e)=>{e.preventDefault();setPage(0);load();}}><label>Search name or email<input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Username or email"/></label><label>Status<select value={status} onChange={(e)=>{setStatus(e.target.value);setPage(0);}}><option value="all">All statuses</option><option value="active">Active</option><option value="deactivated">Deactivated</option></select></label><label>Role<select value={role} onChange={(e)=>{setRole(e.target.value);setPage(0);}}><option value="all">All roles</option><option value="user">Readers</option><option value="admin">Admins</option></select></label><button className="primary">Search</button></form>
     {busy?<p className="loading-state">Loading reader accounts…</p>:<div className="table">{users.length?users.map((item)=><div className="row user-row" key={item.id}>
-        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.role==='admin'?'Email verification enforced by Supabase Auth':item.email_verified?'Email confirmed':'Email not verified · sign-in allowed'}</small></div>
+        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.role==='admin'?'Email verification enforced by Supabase Auth':item.email_verified?'Email confirmed':'Email not verified · sign-in blocked'}</small></div>
         <span className={`badge ${!item.is_active?'danger-badge':''}`}>{item.role==='admin'?'Administrator':item.is_active?'Active reader':'Deactivated'}</span>
         <div className="button-row">{item.role==='user'?<><button type="button" className="secondary" onClick={()=>setAccount(item,{is_active:!item.is_active})}>{item.is_active?'Deactivate':'Activate'}</button><button type="button" className="secondary" disabled={!item.email} onClick={async()=>{try{const result=await api.post(`/api/admin/users/${item.id}/recovery/`);showMessage(result.message);}catch(error){showMessage(error.message);}}}>Send recovery</button><button type="button" className="danger" onClick={()=>removeUser(item)}>Delete</button></>:<span className="admin-protected">Protected administrator</span>}</div>
       </div>):<p className="empty-state">No accounts match these filters.</p>}</div>}
