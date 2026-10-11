@@ -180,6 +180,12 @@ function App() {
   }
 
   useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('email_confirmed') === '1') {
+      setAuthScreen('login-user');
+      setMessage('Email confirmed. You can now sign in.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
     request('/api/session/')
       .then((data) => {
         setCsrfToken(data.csrfToken);

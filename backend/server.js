@@ -34,8 +34,10 @@ const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false
 const storageBucket = process.env.SUPABASE_BOOKS_BUCKET || 'private-books';
 const coverBucket = 'private-book-covers';
 const hostedServiceUrl = process.env.RENDER_EXTERNAL_URL || '';
-const publicAppUrl = process.env.PUBLIC_APP_URL || hostedServiceUrl || 'http://127.0.0.1:5173/static/react/';
-const publicApiUrl = process.env.PUBLIC_API_URL || hostedServiceUrl || publicAppUrl;
+const isProduction = process.env.NODE_ENV === 'production';
+const renderAppUrl = hostedServiceUrl ? new URL('/static/react/', hostedServiceUrl).toString() : '';
+const publicAppUrl = (isProduction && renderAppUrl) || process.env.PUBLIC_APP_URL || renderAppUrl || 'http://127.0.0.1:5173/static/react/';
+const publicApiUrl = (isProduction && hostedServiceUrl) || process.env.PUBLIC_API_URL || hostedServiceUrl || publicAppUrl;
 if (process.env.NODE_ENV === 'production' && (!publicAppUrl.startsWith('https://') || !publicApiUrl.startsWith('https://') || !String(supabaseUrl).startsWith('https://'))) { console.error('Production requires HTTPS for PUBLIC_APP_URL, PUBLIC_API_URL, and SUPABASE_URL.'); process.exit(1); }
 const smtpHost = process.env.SMTP_HOST;
 const smtpPort = Number(process.env.SMTP_PORT || 587);
@@ -321,7 +323,8 @@ app.get('/api/email/verify/', endpoint(async (req, res) => {
   if (!row) return res.status(400).send('This confirmation link is invalid or expired. Please register again or contact the library.');
   fail((await db.from('users').update({ email_verified: true }).eq('id', row.user_id)).error);
   fail((await db.from('email_verification_tokens').update({ used_at: new Date().toISOString() }).eq('id', row.id)).error); await writeAudit({ ...req, user: await getUser(row.user_id) }, 'email_verified', 'user', row.user_id);
-  res.type('html').send('<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Email confirmed</title><body style="font:16px system-ui;max-width:560px;margin:12vh auto;padding:24px;color:#24352e"><h1>Email confirmed</h1><p>Your library account is ready. Return to the library portal and sign in.</p><p><a href="' + publicAppUrl.replace(/[&<>"']/g, '') + '">Open the library portal</a></p></body></html>');
+  const portalUrl = new URL('/static/react/?email_confirmed=1', publicAppUrl).toString();
+  res.redirect(303, portalUrl);
 }));
 app.post('/api/email/resend-confirmation/', verificationResendLimiter, endpoint(async (req, res) => {
   const username = String(req.body.username || '').trim().slice(0, 64);
