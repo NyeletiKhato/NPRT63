@@ -287,8 +287,15 @@ app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (
     return res.status(400).json({ error: 'Invalid username or password.' });
   }
   if (!user.email_verified) {
-    await writeAudit(req, 'login_denied_unverified_email', 'user', user.id);
-    return res.status(403).json({ error: 'Confirm your email before signing in. Check your inbox, or resend the confirmation email.' });
+    // A verification token is created during the new registration flow. Older
+    // member accounts predate mandatory confirmation and may have no token;
+    // preserve their existing sign-in access while enforcing the new policy.
+    const pendingVerification = await one('email_verification_tokens', db.from('email_verification_tokens').select('id').eq('user_id', user.id).limit(1).maybeSingle());
+    if (pendingVerification) {
+      await writeAudit(req, 'login_denied_unverified_email', 'user', user.id);
+      return res.status(403).json({ error: 'Confirm your email before signing in. Check your inbox, or resend the confirmation email.' });
+    }
+    await writeAudit(req, 'legacy_member_login_unverified_email', 'user', user.id);
   }
   if (user.password_hash.startsWith('pbkdf2_sha256$')) fail((await db.from('users').update({ password_hash: bcrypt.hashSync(password, 12) }).eq('id', user.id)).error);
   await clearRateLimits(['login-ip:' + ipKey(req), 'login-user:' + username.toLowerCase()]);
