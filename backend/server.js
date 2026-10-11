@@ -137,6 +137,9 @@ const uploadLimiter = rateLimit((req) => ['upload-user:' + String(req.session?.u
 async function clearRateLimits(parts) { for (const part of parts) { const bucket = crypto.createHmac('sha256', sessionSecret).update(part).digest('hex'); const { error } = await db.rpc('clear_security_rate_limit', { p_bucket: bucket }); if (error) throw error; } }
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+// Accounts created before mandatory confirmation launched keep their prior
+// access, even if an old resend attempt left an expired verification token.
+const MEMBER_EMAIL_CONFIRMATION_CUTOFF = Date.parse('2026-10-11T16:03:39+02:00');
 async function sendVerificationEmail(user, token) {
   if (!emailConfigured) throw new Error('Email confirmation is not configured. Set RESEND_API_KEY and MAIL_FROM, or configure SMTP.');
   const link = new URL('/api/email/verify/', publicApiUrl);
@@ -287,11 +290,10 @@ app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (
     return res.status(400).json({ error: 'Invalid username or password.' });
   }
   if (!user.email_verified) {
-    // A verification token is created during the new registration flow. Older
-    // member accounts predate mandatory confirmation and may have no token;
-    // preserve their existing sign-in access while enforcing the new policy.
-    const pendingVerification = await one('email_verification_tokens', db.from('email_verification_tokens').select('id').eq('user_id', user.id).limit(1).maybeSingle());
-    if (pendingVerification) {
+    // Enforce only for accounts created after launch. Looking for a token here
+    // would incorrectly lock older accounts that previously requested a resend.
+    const createdAt = Date.parse(user.created_at || '');
+    if (Number.isFinite(createdAt) && createdAt >= MEMBER_EMAIL_CONFIRMATION_CUTOFF) {
       await writeAudit(req, 'login_denied_unverified_email', 'user', user.id);
       return res.status(403).json({ error: 'Confirm your email before signing in. Check your inbox, or resend the confirmation email.' });
     }
