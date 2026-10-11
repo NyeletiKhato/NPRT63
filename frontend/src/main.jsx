@@ -1296,7 +1296,7 @@ function Recommendations({ api, showMessage }) {
     .map((book) => ({ ...book, score: recommendationScore(book) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 6);
-  const hasProfile = profile.categories.length || profile.tones.length || profile.goals.length;
+  const hasProfile = profile.categories.length > 0 || profile.tones.length > 0 || profile.goals.length > 0;
   const profileChips = unique([...profile.categories, ...profile.tones, ...profile.goals]).slice(0, 10);
   const confidence = Math.min(100, Math.max(15, profileChips.length * 14));
 
