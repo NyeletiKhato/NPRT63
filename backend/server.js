@@ -719,13 +719,20 @@ app.get('/api/admin/categories/', requireAuth, requireRole('admin'), endpoint(as
   const [categories,books] = await Promise.all([many('categories',db.from('categories').select('*').order('name')),many('books',db.from('books').select('category_id'))]);
   res.json({ categories:categories.map((item)=>({...item,book_count:books.filter((book)=>book.category_id===item.id).length})) });
 }));
+async function categoryNameExists(name, excludeId = null) {
+  const normalized = String(name).trim().replace(/\s+/g, ' ').toLowerCase();
+  const categories = await many('categories', db.from('categories').select('id,name'));
+  return categories.some((category) => category.id !== excludeId && category.name.trim().replace(/\s+/g, ' ').toLowerCase() === normalized);
+}
 app.post('/api/admin/categories/', requireAuth, requireRole('admin'), endpoint(async (req,res) => {
   const name=String(req.body.name||'').trim(); if(!name) return res.status(400).json({error:'Category name is required.'});
+  if(await categoryNameExists(name))return res.status(409).json({error:'That category already exists.'});
   const {data,error}=await db.from('categories').insert({name,description:String(req.body.description||'').trim()}).select().single(); if(error)return res.status(400).json({error:error.code==='23505'?'That category already exists.':'Unable to create category.'});
   await writeAudit(req,'category_created','category',data.id);res.status(201).json({category:data});
 }));
 app.put('/api/admin/categories/:id/', requireAuth, requireRole('admin'), endpoint(async (req,res)=>{
   const name=String(req.body.name||'').trim();if(!name)return res.status(400).json({error:'Category name is required.'});
+  if(await categoryNameExists(name, Number(req.params.id)))return res.status(409).json({error:'That category already exists.'});
   const {data,error}=await db.from('categories').update({name,description:String(req.body.description||'').trim(),is_active:req.body.is_active!==false}).eq('id',req.params.id).select().maybeSingle();if(error)return res.status(400).json({error:'Unable to update category.'});if(!data)return res.status(404).json({error:'Category not found.'});
   fail((await db.from('books').update({category:data.name}).eq('category_id',data.id)).error);await writeAudit(req,'category_updated','category',data.id);res.json({category:data});
 }));
