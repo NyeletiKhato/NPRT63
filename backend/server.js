@@ -709,11 +709,23 @@ app.put('/api/admin/settings/:key/', requireAuth, requireRole('admin'), endpoint
   }
   const {error}=await db.from('library_settings').upsert({setting_key:key,setting_value:safe,updated_by:req.user.id,updated_at:new Date().toISOString()});fail(error);await writeAudit(req,'system_setting_updated','setting',key,{fields:Object.keys(safe)});res.json({key,value:safe});
 }));
+async function listStorageObjects(bucket) {
+  const objects = [], limit = 1000;
+  for (let offset = 0; ; offset += limit) {
+    const { data, error } = await db.storage.from(bucket).list('', { limit, offset });
+    fail(error);
+    objects.push(...(data || []));
+    if (!data || data.length < limit) return objects;
+  }
+}
 app.get('/api/admin/storage-health/', requireAuth, requireRole('admin'), endpoint(async (_req,res)=>{
-  const books=await many('books',db.from('books').select('id,title,virtual_file_path,cover_path,file_size,status'));
-  const [files,covers]=await Promise.all([db.storage.from(storageBucket).list('',{limit:1000}),db.storage.from(coverBucket).list('',{limit:1000})]);
-  const bookObjects=files.data||[],coverObjects=covers.data||[];const bookKeys=new Set(books.map(b=>b.virtual_file_path).filter(Boolean)),coverKeys=new Set(books.map(b=>b.cover_path).filter(Boolean));
-  res.json({book_bucket:{objects:bookObjects.length,bytes:bookObjects.reduce((sum,item)=>sum+Number(item.metadata?.size||0),0),orphaned:bookObjects.filter(item=>!bookKeys.has(item.name)).map(item=>item.name)},cover_bucket:{objects:coverObjects.length,bytes:coverObjects.reduce((sum,item)=>sum+Number(item.metadata?.size||0),0),orphaned:coverObjects.filter(item=>!coverKeys.has(item.name)).map(item=>item.name)},missing_books:books.filter(b=>b.status!=='archived'&&!b.virtual_file_path).map(b=>({id:b.id,title:b.title})),missing_covers:books.filter(b=>b.status!=='archived'&&!b.cover_path).map(b=>({id:b.id,title:b.title}))});
+  const [books,bookObjects,coverObjects]=await Promise.all([
+    many('books',db.from('books').select('id,title,virtual_file_path,cover_path,file_size,status')),
+    listStorageObjects(storageBucket),listStorageObjects(coverBucket),
+  ]);
+  const bookKeys=new Set(books.map(b=>b.virtual_file_path).filter(Boolean)),coverKeys=new Set(books.map(b=>b.cover_path).filter(Boolean));
+  const storedBookKeys=new Set(bookObjects.map(item=>item.name)),storedCoverKeys=new Set(coverObjects.map(item=>item.name));
+  res.json({book_bucket:{objects:bookObjects.length,bytes:bookObjects.reduce((sum,item)=>sum+Number(item.metadata?.size||0),0),orphaned:bookObjects.filter(item=>!bookKeys.has(item.name)).map(item=>item.name)},cover_bucket:{objects:coverObjects.length,bytes:coverObjects.reduce((sum,item)=>sum+Number(item.metadata?.size||0),0),orphaned:coverObjects.filter(item=>!coverKeys.has(item.name)).map(item=>item.name)},missing_books:books.filter(b=>b.status!=='archived'&&!b.virtual_file_path).map(b=>({id:b.id,title:b.title})),unavailable_books:books.filter(b=>b.status!=='archived'&&b.virtual_file_path&&!storedBookKeys.has(b.virtual_file_path)).map(b=>({id:b.id,title:b.title,status:b.status})),missing_covers:books.filter(b=>b.status!=='archived'&&!b.cover_path).map(b=>({id:b.id,title:b.title})),unavailable_covers:books.filter(b=>b.status!=='archived'&&b.cover_path&&!storedCoverKeys.has(b.cover_path)).map(b=>({id:b.id,title:b.title}))});
 }));
 app.get('/api/admin/users/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{
   const page=Math.max(0,Number.parseInt(req.query.page||'0',10)||0),limit=50;let query=db.from('users').select('id,username,email,role,is_active,email_verified,profile_photo,created_at',{count:'exact'}).order('created_at',{ascending:false}).range(page*limit,page*limit+limit-1);
