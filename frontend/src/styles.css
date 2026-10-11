@@ -1160,14 +1160,15 @@ select {
 .user-row > div { display: grid; gap: 4px; }
 .admin-protected { color: #64748b; font-size: .82rem; font-weight: 700; padding: 0 14px; }
 .account-panel { max-width: 840px; }
-.profile-photo-editor { align-items: center; background: #f5fbf8; border: 1px solid #d5e9e0; border-radius: 12px; display: flex; gap: 20px; margin-top: 24px; padding: 20px; }
-.profile-photo-preview { flex: 0 0 auto; font-size: 2rem; height: 100px; width: 100px; }
+.profile-photo-editor { align-items: center; background: #f5fbf8; border: 1px solid #d5e9e0; border-radius: 12px; display: grid; gap: 20px; grid-template-columns: 100px minmax(0, 1fr); margin-top: 24px; max-width: 100%; padding: 20px; width: 100%; }
+.profile-photo-preview { font-size: 2rem; height: 100px; width: 100px; }
 .profile-photo-preview img { height: 100%; object-fit: cover; width: 100%; }
-.profile-photo-editor > div:last-child { display: grid; gap: 8px; }
+.profile-photo-editor > div:last-child { display: grid; gap: 8px; min-width: 0; }
 .profile-role, .profile-photo-editor small { color: #5e6b78; font-size: .87rem; }
 .photo-upload { background: #0f766e; border-radius: 6px; color: white; cursor: pointer; display: inline-flex; font-size: .9rem; font-weight: 700; justify-content: center; padding: 10px 14px; width: fit-content; }
 .photo-upload input { height: 1px; opacity: 0; overflow: hidden; position: absolute; width: 1px; }
 .profile-photo-editor .link-button { justify-self: start; }
+.account-panel { box-sizing: border-box; min-width: 0; }
 .danger-zone { align-items: center; background: #fff7f7; border: 1px solid #fecaca; border-radius: 10px; display: flex; gap: 20px; justify-content: space-between; margin-top: 28px; padding: 20px; }
 .danger-zone > div:first-child { display: grid; gap: 5px; }
 .danger-zone span { color: #7f1d1d; font-size: .9rem; }
@@ -1684,6 +1685,12 @@ input:focus, select:focus { border-color: #649184; box-shadow: 0 0 0 3px rgba(31
   .book-card > div:nth-child(2) { align-self: end; }
   .book-actions { align-self: start; }
   .book-actions button { min-height: 36px; }
+}
+
+@media (max-width: 600px) {
+  .profile-photo-editor { gap: 14px; grid-template-columns: 76px minmax(0, 1fr); padding: 14px; }
+  .profile-photo-preview { font-size: 1.6rem; height: 76px; width: 76px; }
+  .photo-upload { max-width: 100%; white-space: normal; }
 }
 
 /* Give category management a calmer, more readable list layout. */
