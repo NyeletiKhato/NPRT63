@@ -11,15 +11,19 @@ services:
         value: production
       - key: SESSION_SECRET
         generateValue: true
-      - key: MFA_ENCRYPTION_KEY
-        generateValue: true
-      - key: ADMIN_USERNAME
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
       - key: PUBLIC_APP_URL
         sync: false
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
       - key: SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false

@@ -9,19 +9,28 @@ const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 const { validateBookFile, validateCoverFile } = require('./file-validation');
 const { isValidDatabaseId, isValidUnsignedInteger } = require('./request-validation');
+const { normalizeEmail, isValidEmail } = require('./email-validation');
+const { canAccessAdminApi } = require('./admin-auth-policy');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const browserSupabaseUrl = process.env.VITE_SUPABASE_URL || '';
+const browserSupabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 const sessionSecret = process.env.SESSION_SECRET || '';
-const mfaEncryptionSecret = process.env.MFA_ENCRYPTION_KEY || '';
-const mfaEncryptionKey = crypto.createHash('sha256').update(mfaEncryptionSecret).digest();
 if (sessionSecret.length < 32) { console.error('Set SESSION_SECRET to a stable random value of at least 32 characters.'); process.exit(1); }
-if (mfaEncryptionSecret.length < 32) { console.error('Set MFA_ENCRYPTION_KEY to a stable random secret of at least 32 characters.'); process.exit(1); }
 if (!supabaseUrl || !serviceKey) {
   console.error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY before starting the API.');
   process.exit(1);
+}
+if (process.env.NODE_ENV === 'production') {
+  let sameSupabaseProject = false;
+  try { sameSupabaseProject = new URL(browserSupabaseUrl).origin === new URL(supabaseUrl).origin; } catch {}
+  if (!browserSupabaseUrl || !browserSupabaseKey || !sameSupabaseProject || browserSupabaseKey === serviceKey) {
+    console.error('Production admin Auth requires matching VITE_SUPABASE_URL and SUPABASE_URL plus the public VITE_SUPABASE_ANON_KEY. Never use the service-role key in Vite.');
+    process.exit(1);
+  }
 }
 const supabaseTimeoutMs = Number(process.env.SUPABASE_TIMEOUT_MS || 20000);
 if (!Number.isInteger(supabaseTimeoutMs) || supabaseTimeoutMs < 1000 || supabaseTimeoutMs > 60000) { console.error('SUPABASE_TIMEOUT_MS must be an integer from 1000 through 60000.'); process.exit(1); }
@@ -77,7 +86,7 @@ const one = async (table, query) => { const { data, error } = await query; fail(
 const many = async (table, query) => { const { data, error } = await query; fail(error); return data || []; };
 const getUser = async (id) => one('users', db.from('users').select('*').eq('id', id).maybeSingle());
 const getBook = async (id) => one('books', db.from('books').select('*').eq('id', id).maybeSingle());
-const safeUser = (u) => u && ({ id: u.id, username: u.username, email: u.email, role: u.role, is_active: u.is_active, email_verified: u.email_verified, created_at:u.created_at, profile_photo: u.profile_photo || '', is_authenticated: true });
+const safeUser = (u) => u && ({ id: u.id, username: u.username, email: u.email, role: u.role, is_active: u.is_active, email_verified: u.role === 'admin' ? Boolean(u.auth_email_confirmed) : u.email_verified, created_at:u.created_at, profile_photo: u.profile_photo || '', is_authenticated: true });
 const MAX_SESSION_AGE_MS = 8 * 60 * 60 * 1000;
 const safeBook = (b) => { if (!b) return b; const { virtual_file_path, cover_path, ...v } = b; return { ...v, has_virtual_version: Boolean(virtual_file_path), has_cover: Boolean(cover_path), cover_url: cover_path ? `/api/books/${b.id}/cover/` : '' }; };
 
@@ -99,37 +108,6 @@ class SupabaseSessionStore extends session.Store {
 const newCsrfToken = () => crypto.randomBytes(32).toString('hex');
 function regenerateSession(req) { return new Promise((resolve, reject) => req.session.regenerate((error) => error ? reject(error) : resolve())); }
 function saveSession(req) { return new Promise((resolve, reject) => req.session.save((error) => error ? reject(error) : resolve())); }
-function encodeBase32(bytes) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = 0, value = 0, output = '';
-  for (const byte of bytes) { value = (value << 8) | byte; bits += 8; while (bits >= 5) { output += alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
-  if (bits) output += alphabet[(value << (5 - bits)) & 31]; return output;
-}
-function decodeBase32(text) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = 0, value = 0; const output = [];
-  for (const char of text.toUpperCase().replace(/=+$/,'')) { const digit = alphabet.indexOf(char); if (digit < 0) throw new Error('Invalid MFA secret.'); value = (value << 5) | digit; bits += 5; if (bits >= 8) { output.push((value >>> (bits - 8)) & 255); bits -= 8; } }
-  return Buffer.from(output);
-}
-function encryptMfaSecret(secret) {
-  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', mfaEncryptionKey, iv);
-  const encrypted = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
-  return [iv.toString('base64'), cipher.getAuthTag().toString('base64'), encrypted.toString('base64')].join('.');
-}
-function decryptMfaSecret(value) {
-  const [iv, tag, encrypted] = String(value || '').split('.'); const decipher = crypto.createDecipheriv('aes-256-gcm', mfaEncryptionKey, Buffer.from(iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(tag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]).toString('utf8');
-}
-function verifyTotp(secret, supplied) {
-  if (!/^\d{6}$/.test(String(supplied || ''))) return false;
-  const key = decodeBase32(secret), counter = Math.floor(Date.now() / 30000);
-  for (let offset = -1; offset <= 1; offset += 1) {
-    const message = Buffer.alloc(8); message.writeBigUInt64BE(BigInt(counter + offset));
-    const digest = crypto.createHmac('sha1', key).update(message).digest(); const index = digest[digest.length - 1] & 15;
-    const value = (digest.readUInt32BE(index) & 0x7fffffff) % 1000000;
-    const expected = Buffer.from(String(value).padStart(6, '0')); const actual = Buffer.from(String(supplied));
-    if (expected.length === actual.length && crypto.timingSafeEqual(expected, actual)) return true;
-  }
-  return false;
-}
 async function writeAudit(req, event, targetType = '', targetId = null, details = {}) {
   const { error } = await db.from('security_audit_logs').insert({ actor_user_id: req.user?.id || null, event, target_type: targetType, target_id: targetId == null ? null : String(targetId), ip_address: req.ip || null, details: { ...details, request_id: req.requestId || null } });
   if (error) logEvent('error', 'audit_write_failed', { request_id: req.requestId || null, error_code: error.code || 'unknown' });
@@ -154,7 +132,6 @@ const registrationLimiter = rateLimit((req) => ['register-ip:' + ipKey(req)], 20
 const verificationResendLimiter = rateLimit((req) => ['verify-resend-ip:' + ipKey(req), 'verify-resend-user:' + String(req.body.identifier || req.body.username || req.body.email || '').trim().toLowerCase()], 3, 900, 'Too many confirmation requests. Wait 15 minutes and try again.');
 const newsletterLimiter = rateLimit((req) => ['newsletter-ip:' + ipKey(req)], 10, 3600, 'Too many newsletter requests. Try again later.');
 const resetLimiter = rateLimit((req) => ['reset-ip:' + ipKey(req), 'reset-user:' + String(req.body.username || '').trim().toLowerCase()], 5, 900, 'Too many password reset attempts. Wait 15 minutes and try again.');
-const mfaLimiter = rateLimit((req) => ['mfa-ip:' + ipKey(req), 'mfa-user:' + String(req.session?.pendingMfaUserId || req.session?.adminMfaSetupUserId || '')], 5, 900, 'Too many verification attempts. Wait 15 minutes and try again.');
 const searchLimiter = rateLimit((req) => ['search-user:' + String(req.session?.userId || ipKey(req))], 120, 60, 'Too many catalogue searches. Please wait a moment and try again.');
 const uploadLimiter = rateLimit((req) => ['upload-user:' + String(req.session?.userId || ipKey(req))], 20, 900, 'Too many file uploads. Please wait and try again.');
 async function clearRateLimits(parts) { for (const part of parts) { const bucket = crypto.createHmac('sha256', sessionSecret).update(part).digest('hex'); const { error } = await db.rpc('clear_security_rate_limit', { p_bucket: bucket }); if (error) throw error; } }
@@ -180,19 +157,43 @@ const passwordMatches = (password, encoded) => {
 };
 async function requireAuth(req, res, next) {
   try {
+    const authorization = String(req.get('Authorization') || '');
+    if (/^Bearer\s+/i.test(authorization)) {
+      const accessToken = authorization.replace(/^Bearer\s+/i, '').trim();
+      if (!accessToken || accessToken.length > 8192) return res.status(401).json({ error: 'Authentication required.' });
+      const { data: identity, error: identityError } = await db.auth.getUser(accessToken);
+      if (identityError || !identity?.user || !identity.user.email_confirmed_at) return res.status(401).json({ error: 'A confirmed Supabase email address is required.' });
+      const { data: profile, error: profileError } = await db.from('users').select('*').eq('auth_user_id', identity.user.id).maybeSingle();
+      fail(profileError);
+      if (!profile?.is_active || profile.role !== 'admin') return res.status(403).json({ error: 'This account is not authorized for administrator access.' });
+      req.user = profile;
+      req.authIdentity = identity.user;
+      req.authAccessToken = accessToken;
+      const { data: assurance, error: assuranceError } = await db.auth.mfa.getAuthenticatorAssuranceLevel(accessToken);
+      if (assuranceError) return res.status(401).json({ error: 'Could not verify administrator MFA status.' });
+      req.authAal = assurance?.currentLevel || 'aal1';
+      if (!canAccessAdminApi({ profile, emailConfirmedAt: identity.user.email_confirmed_at, assuranceLevel: req.authAal })) {
+        await writeAudit(req, 'admin_mfa_required_access_denied', 'user', profile.id, { assurance_level: req.authAal });
+        return res.status(403).json({ error: 'Complete administrator MFA before accessing library management.' });
+      }
+      return next();
+    }
     if (!req.session.userId) return res.status(401).json({ error: 'Authentication required.' });
     const authenticatedAt = Number(req.session.authenticatedAt);
     if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > MAX_SESSION_AGE_MS) { req.session.destroy(() => {}); return res.status(401).json({ error: 'Your session expired. Sign in again.' }); }
     req.user = await getUser(req.session.userId);
     if (!req.user?.is_active) { req.session.destroy(() => {}); return res.status(401).json({ error: 'This account is no longer active.' }); }
-    if (req.user.role === 'admin' && !req.session.adminMfaVerified) { req.session.destroy(() => {}); return res.status(401).json({ error: 'Admin verification is required. Sign in again.' }); }
+    if (req.user.role === 'admin') { req.session.destroy(() => {}); return res.status(401).json({ error: 'Administrator access requires a Supabase Auth session.' }); }
     next();
   } catch (e) { next(e); }
 }
 const requireRole = (role) => {
   const deniedLimiter = rateLimit((req) => [`role-denied:${role}:${req.user?.id || ipKey(req)}`], 10, 60, 'Access denied.');
   return (req, res, next) => {
-    if (req.user?.role === role) return next();
+    if (req.user?.role === role) {
+      if (role === 'admin' && !canAccessAdminApi({ profile: req.user, emailConfirmedAt: req.authIdentity?.email_confirmed_at, assuranceLevel: req.authAal })) return res.status(403).json({ error: 'Confirmed email and administrator MFA verification are required.' });
+      return next();
+    }
     if (!req.user) return res.status(401).json({ error: 'Authentication required.' });
     return deniedLimiter(req, res, () => {
       writeAudit(req, 'access_denied', 'endpoint', req.path, { required_role: role, actual_role: req.user.role }).catch(() => {});
@@ -207,7 +208,8 @@ app.use((req, res, next) => { req.requestId = crypto.randomUUID(); res.setHeader
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'); res.setHeader('Cache-Control', req.path.startsWith('/api/') ? 'no-store' : 'public, max-age=0, must-revalidate'); res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://images.unsplash.com; font-src 'self' data:; connect-src 'self'; frame-src 'self'" + (process.env.NODE_ENV === 'production' ? '; upgrade-insecure-requests' : ''));
+  const supabaseOrigin = (() => { try { return new URL(supabaseUrl).origin; } catch { return ''; } })();
+  res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://images.unsplash.com; font-src 'self' data:; connect-src 'self' ${supabaseOrigin}; frame-src 'self'` + (process.env.NODE_ENV === 'production' ? '; upgrade-insecure-requests' : ''));
   if (process.env.NODE_ENV === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
@@ -232,7 +234,7 @@ app.use('/api', (req, res, next) => {
 const secureCookie = process.env.NODE_ENV === 'production';
 app.use(session({ name: secureCookie ? '__Host-library.sid' : 'library.sid', secret: sessionSecret, store: new SupabaseSessionStore(), resave: false, saveUninitialized: false, rolling: true, cookie: { httpOnly: true, sameSite: 'lax', secure: secureCookie, path: '/', maxAge: 8 * 60 * 60 * 1000 } }));
 app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/') || !['POST','PUT','PATCH','DELETE'].includes(req.method) || req.path === '/api/newsletter/subscribe/') return next();
+  if (!req.path.startsWith('/api/') || !['POST','PUT','PATCH','DELETE'].includes(req.method) || req.path === '/api/newsletter/subscribe/' || /^Bearer\s+/i.test(String(req.get('Authorization') || ''))) return next();
   const supplied = String(req.get('X-CSRFToken') || req.get('X-CSRF-Token') || ''); const expected = String(req.session?.csrfToken || '');
   if (!expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return res.status(403).json({ error: 'Your security token expired. Refresh the page and try again.' });
   next();
@@ -242,82 +244,64 @@ app.use('/api', (req, res, next) => {
   if (match && !isValidDatabaseId(match[1])) return res.status(400).json({ error: 'Enter a valid record ID.' });
   next();
 });
-app.get('/api/session/', endpoint(async (req, res) => { req.session.csrfToken ||= newCsrfToken(); const user = req.session.userId ? await getUser(req.session.userId) : null; const authenticatedAt = Number(req.session.authenticatedAt); const sessionValid = Number.isFinite(authenticatedAt) && Date.now() - authenticatedAt <= MAX_SESSION_AGE_MS; if (user && (!sessionValid || !user.is_active || (user.role === 'admin' && !req.session.adminMfaVerified))) req.session.destroy(() => {}); res.json({ csrfToken: req.session.csrfToken, user: user?.is_active && sessionValid && (user.role !== 'admin' || req.session.adminMfaVerified) ? safeUser(user) : null }); }));
+app.get('/api/session/', endpoint(async (req, res) => {
+  const authorization = String(req.get('Authorization') || '');
+  if (/^Bearer\s+/i.test(authorization)) {
+    const accessToken = authorization.replace(/^Bearer\s+/i, '').trim();
+    const { data: identity, error } = await db.auth.getUser(accessToken);
+    if (error || !identity?.user || !identity.user.email_confirmed_at) return res.json({ user: null, adminSetupRequired: false });
+    const { data: profile, error: profileError } = await db.from('users').select('*').eq('auth_user_id', identity.user.id).maybeSingle(); fail(profileError);
+    if (!profile || profile.role !== 'admin' || !profile.is_active) return res.json({ user: null, adminSetupRequired: false });
+    const { data: assurance, error: assuranceError } = await db.auth.mfa.getAuthenticatorAssuranceLevel(accessToken); if (assuranceError) return res.status(503).json({ error: 'Could not verify administrator MFA status.' });
+    req.user = profile;
+    await writeAudit(req, 'admin_auth_identity_verified', 'user', profile.id, { email_confirmed: true, assurance_level: assurance?.currentLevel || 'aal1' });
+    return res.json({ user: assurance?.currentLevel === 'aal2' ? safeUser({ ...profile, email: identity.user.email, auth_email_confirmed: true }) : null, adminSetupRequired: true, adminEmail: identity.user.email, adminUsername: profile.username, mfaRequired: true, mfaEnrolled: Boolean(identity.user.factors?.some((factor) => factor.status === 'verified')) });
+  }
+  req.session.csrfToken ||= newCsrfToken(); const user = req.session.userId ? await getUser(req.session.userId) : null; const authenticatedAt = Number(req.session.authenticatedAt); const sessionValid = Number.isFinite(authenticatedAt) && Date.now() - authenticatedAt <= MAX_SESSION_AGE_MS; if (user && (!sessionValid || !user.is_active || user.role === 'admin')) req.session.destroy(() => {}); res.json({ csrfToken: req.session.csrfToken, user: user?.is_active && sessionValid && user.role !== 'admin' ? safeUser(user) : null });
+}));
 if (process.env.NODE_ENV !== 'production') app.get('/api/network-address/', (_req, res) => { const ips = Object.values(os.networkInterfaces()).flatMap((x) => x || []).filter((x) => x.family === 'IPv4' && !x.internal).map((x) => x.address); res.json({ address: ips[0] || null }); });
 app.post('/api/newsletter/subscribe/', newsletterLimiter, endpoint(async (req, res) => { const email = String(req.body.email || '').trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' }); const { error } = await db.from('newsletter_subscriptions').upsert({ email }, { onConflict: 'email', ignoreDuplicates: true }); fail(error); res.status(201).json({ message: 'You are subscribed to library updates.' }); }));
-async function completeAdminLogin(req, res, user) {
-  await regenerateSession(req); req.session.userId = user.id; req.session.adminMfaVerified = true; req.session.authenticatedAt = Date.now(); req.session.csrfToken = newCsrfToken();
-  // Persist the rotated, fully verified session before telling the browser login succeeded.
-  await saveSession(req);
-  fail((await db.from('login_activities').insert({ user_id: user.id })).error); req.user = user; await writeAudit(req, 'login_success_mfa', 'user', user.id);
-  res.json({ csrfToken: req.session.csrfToken, user: safeUser(user) });
-}
-app.post('/api/admin/mfa/setup/', mfaLimiter, endpoint(async (req, res) => {
-  const user = req.session.pendingMfaUserId && await getUser(req.session.pendingMfaUserId);
-  if (!user || user.role !== 'admin' || user.admin_mfa_enabled) return res.status(403).json({ error: 'Admin verification setup is not available for this session.' });
-  let secret = user.admin_mfa_secret ? decryptMfaSecret(user.admin_mfa_secret) : encodeBase32(crypto.randomBytes(20));
-  if (!user.admin_mfa_secret) fail((await db.from('users').update({ admin_mfa_secret: encryptMfaSecret(secret) }).eq('id', user.id)).error);
-  const label = encodeURIComponent('Rustenburg Library:' + user.username); const issuer = encodeURIComponent('Rustenburg Library');
-  res.json({ otpauthUrl: 'otpauth://totp/' + label + '?secret=' + secret + '&issuer=' + issuer + '&algorithm=SHA1&digits=6&period=30' });
-}));
-app.post('/api/admin/mfa/verify/', mfaLimiter, endpoint(async (req, res) => {
-  const user = req.session.pendingMfaUserId && await getUser(req.session.pendingMfaUserId);
-  if (!user || user.role !== 'admin' || !user.admin_mfa_enabled || !user.admin_mfa_secret) return res.status(403).json({ error: 'Admin verification is not available for this session.' });
-  if (!verifyTotp(decryptMfaSecret(user.admin_mfa_secret), req.body.code)) { req.user = user; await writeAudit(req, 'admin_mfa_failed', 'user', user.id); return res.status(400).json({ error: 'That verification code is incorrect or expired.' }); }
-  await completeAdminLogin(req, res, user);
-}));
-app.post('/api/admin/mfa/confirm-setup/', mfaLimiter, endpoint(async (req, res) => {
-  const user = req.session.pendingMfaUserId && await getUser(req.session.pendingMfaUserId);
-  if (!user || user.role !== 'admin' || user.admin_mfa_enabled || !user.admin_mfa_secret) return res.status(403).json({ error: 'Admin verification setup is not available for this session.' });
-  if (!verifyTotp(decryptMfaSecret(user.admin_mfa_secret), req.body.code)) { req.user = user; await writeAudit(req, 'admin_mfa_setup_failed', 'user', user.id); return res.status(400).json({ error: 'That verification code is incorrect or expired.' }); }
-  fail((await db.from('users').update({ admin_mfa_enabled: true }).eq('id', user.id)).error);
-  user.admin_mfa_enabled = true; req.user = user; await writeAudit(req, 'admin_mfa_enabled', 'user', user.id);
-  await completeAdminLogin(req, res, user);
-}));
 app.post('/api/login/', loginIpLimiter, loginCredentialLimiter, endpoint(async (req, res) => {
   const username = String(req.body.username || '').trim().slice(0, 100);
-  let user = await one('users', db.from('users').select('*').eq('username', username).maybeSingle());
+  const requestedRole = req.body.role === 'admin' ? 'admin' : 'user';
+  if (requestedRole === 'admin') return res.status(403).json({ error: 'Administrator sign-in uses the assigned Supabase Auth email and password.' });
+  let user = await one('users', db.from('users').select('*').eq('username', username).eq('role', requestedRole).maybeSingle());
   // Registration preserves username casing. Let members sign in with different
   // casing too, while refusing ambiguous matches if legacy data has duplicates.
   if (!user && username) {
     const pattern = username.replace(/[\\%_]/g, '\\$&');
-    const matches = await many('users', db.from('users').select('*').ilike('username', pattern).limit(2));
+    const matches = await many('users', db.from('users').select('*').ilike('username', pattern).eq('role', requestedRole).limit(2));
     if (matches.length === 1) user = matches[0];
   }
   // Members may also sign in with their email address, provided it identifies
   // exactly one active member account. Admins continue to use their username.
   if (!user && username.includes('@')) {
     const emailPattern = username.replace(/[\\%_]/g, '\\$&');
-    const matches = await many('users', db.from('users').select('*').ilike('email', emailPattern).eq('role', 'user').limit(2));
+    const matches = await many('users', db.from('users').select('*').ilike('email', emailPattern).eq('role', requestedRole).limit(2));
     if (matches.length === 1) user = matches[0];
   }
   const password = String(req.body.password || '');
   if (!user || Buffer.byteLength(password, 'utf8') > 72 || !passwordMatches(password, user.password_hash)) { await writeAudit(req, 'login_failed', 'user', username, { requested_role: req.body.role || 'user' }); return res.status(400).json({ error: 'Invalid username or password.' }); }
-  if (!user.is_active || user.role !== (req.body.role || 'user')) {
+  if (!user.is_active || user.role !== requestedRole) {
     await writeAudit(req, 'login_denied', 'user', user.id);
     return res.status(400).json({ error: 'Invalid username or password.' });
   }
   if (user.password_hash.startsWith('pbkdf2_sha256$')) fail((await db.from('users').update({ password_hash: bcrypt.hashSync(password, 12) }).eq('id', user.id)).error);
   await clearRateLimits(['login-ip:' + ipKey(req), 'login-user:' + username.toLowerCase()]);
-  if (user.role === 'admin') {
-    await regenerateSession(req); req.session.pendingMfaUserId = user.id; req.session.csrfToken = newCsrfToken();
-    await saveSession(req);
-    req.user = user; await writeAudit(req, user.admin_mfa_enabled ? 'admin_password_verified_mfa_pending' : 'admin_mfa_enrollment_started', 'user', user.id);
-    return res.json(user.admin_mfa_enabled ? { mfa_required: true, csrfToken: req.session.csrfToken } : { mfa_setup_required: true, csrfToken: req.session.csrfToken });
-  }
   await regenerateSession(req); req.session.userId = user.id; req.session.authenticatedAt = Date.now(); req.session.csrfToken = newCsrfToken();
   await saveSession(req);
   fail((await db.from('login_activities').insert({ user_id: user.id })).error); req.user = user; await writeAudit(req, 'login_success', 'user', user.id);
   res.json({ csrfToken: req.session.csrfToken, user: safeUser(user) });
 }));
 app.post('/api/register/', registrationLimiter, endpoint(async (req, res) => {
+  if (Object.hasOwn(req.body, 'role') && req.body.role !== 'user') return res.status(400).json({ error: 'Public registration is for member accounts only.' });
   const registrationSetting = await one('library_settings', db.from('library_settings').select('setting_value').eq('setting_key','catalogue').maybeSingle());
   if (registrationSetting?.setting_value?.registration_enabled === false) return res.status(403).json({ error: 'New account registration is currently closed.' });
   const username = String(req.body.username || '').trim();
-  const email = String(req.body.email || '').trim().toLowerCase();
+  const email = normalizeEmail(req.body.email);
   const password = String(req.body.password || '');
   if (!username || username.length > 64 || !email || email.length > 254 || !password) return res.status(400).json({ error: 'Enter a username up to 64 characters, a valid email address, and a password.' });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Use a password between 8 and 72 UTF-8 bytes.' });
   const { data: user, error } = await db.from('users').insert({ username, email, password_hash: bcrypt.hashSync(password, 12), role: 'user', email_verified: false }).select().single();
   if (error) {
@@ -689,7 +673,7 @@ app.get('/api/admin/audit/', requireAuth, requireRole('admin'), endpoint(async (
   const {data,error,count}=await query;fail(error);const records=await Promise.all((data||[]).map(async item=>({...item,actor:item.actor_user_id?safeUser(await getUser(item.actor_user_id)):null})));res.json({records,total:count||0,page,limit});
 }));
 app.get('/api/admin/settings/', requireAuth, requireRole('admin'), endpoint(async (_req,res)=>{const rows=await many('library_settings',db.from('library_settings').select('setting_key,setting_value,updated_at'));res.json({settings:Object.fromEntries(rows.map(row=>[row.setting_key,row.setting_value]))});}));
-app.get('/api/admin/security/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const [admins,me]=await Promise.all([many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true)),getUser(req.user.id)]);res.json({mfa_enabled:Boolean(me.admin_mfa_enabled),mfa_required:true,active_admins:admins.length,smtp_configured:emailConfigured,email_provider:resendApiKey?'Resend API':mailer?'SMTP':'Not configured'});}));
+app.get('/api/admin/security/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{const admins=await many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true));res.json({mfa_enabled:req.authAal==='aal2',mfa_required:true,active_admins:admins.length,smtp_configured:emailConfigured,email_provider:resendApiKey?'Resend API':mailer?'SMTP':'Not configured'});}));
 app.put('/api/admin/settings/:key/', requireAuth, requireRole('admin'), endpoint(async (req,res)=>{
   const key=String(req.params.key);if(!['branding','catalogue'].includes(key))return res.status(400).json({error:'That setting cannot be changed here.'});const value=req.body.value;if(!value||typeof value!=='object'||Array.isArray(value))return res.status(400).json({error:'Provide valid settings.'});
   let safe;if(key==='branding')safe={name:String(value.name||'').trim().slice(0,100),contact_email:String(value.contact_email||'').trim().slice(0,254),contact_phone:String(value.contact_phone||'').trim().slice(0,40),logo_url:String(value.logo_url||'').trim().slice(0,500)};
@@ -728,7 +712,7 @@ app.get('/api/admin/users/', requireAuth, requireRole('admin'), endpoint(async(r
 app.patch('/api/admin/users/:id/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{
   const target=await getUser(req.params.id);if(!target)return res.status(404).json({error:'Account not found.'});
   const role=req.body.role===undefined?target.role:req.body.role,active=req.body.is_active===undefined?target.is_active:Boolean(req.body.is_active);
-  if(!['admin','user'].includes(role))return res.status(400).json({error:'Choose a valid role.'});if(target.id===req.user.id&&(role!=='admin'||!active))return res.status(400).json({error:'You cannot remove your own admin access.'});
+  if(!['admin','user'].includes(role))return res.status(400).json({error:'Choose a valid role.'});if(target.role!=='admin'&&role==='admin')return res.status(403).json({error:'Use the authorized server-side Supabase Auth provisioning process to grant administrator access.'});if(target.id===req.user.id&&(role!=='admin'||!active))return res.status(400).json({error:'You cannot remove your own admin access.'});
   if(target.role==='admin'&&(role!=='admin'||!active)){const admins=await many('users',db.from('users').select('id').eq('role','admin').eq('is_active',true));if(admins.length<=1)return res.status(400).json({error:'The last active administrator cannot be deactivated or demoted.'});}
   fail((await db.from('users').update({role,is_active:active}).eq('id',target.id)).error);await writeAudit(req,role!==target.role?'reader_role_changed':active!==target.is_active?(active?'reader_activated':'reader_deactivated'):'reader_updated','user',target.id,{role,is_active:active});res.json({user:safeUser(await getUser(target.id))});
 }));
@@ -755,14 +739,6 @@ app.use((error, req, res, _next) => {
 async function start() {
   await ensurePrivateBucket(storageBucket, { fileSizeLimit: 52428800, allowedMimeTypes: ['application/pdf', 'text/plain'] });
   await ensurePrivateBucket(coverBucket, { fileSizeLimit: 5242880, allowedMimeTypes: ['image/jpeg','image/png','image/webp'] });
-  const username = process.env.ADMIN_USERNAME || 'admin';
-  const existing = await one('users', db.from('users').select('id').eq('role','admin').limit(1).maybeSingle());
-  if (!existing) {
-    const initialPassword = String(process.env.ADMIN_PASSWORD || '');
-    if (initialPassword.length < 12 || Buffer.byteLength(initialPassword, 'utf8') > 72) throw new Error('Set ADMIN_PASSWORD to a unique password between 12 and 72 UTF-8 bytes before first startup.');
-    const { error } = await db.from('users').insert({ username, email: '', password_hash: bcrypt.hashSync(initialPassword, 12), role: 'admin', email_verified: true });
-    fail(error); logEvent('warn', 'initial_admin_created', { username });
-  }
   fail((await db.from('app_sessions').delete().lte('expires_at', new Date().toISOString())).error);
   const sessionCleanup = setInterval(() => db.from('app_sessions').delete().lte('expires_at', new Date().toISOString()).then(({ error }) => { if (error) logEvent('error', 'expired_session_cleanup_failed', { error_code: error.code || 'unknown' }); }), 60 * 60 * 1000); sessionCleanup.unref();
   const server = app.listen(port, '0.0.0.0', () => logEvent('info', 'server_started', { port, host: '0.0.0.0', node_env: process.env.NODE_ENV || 'development' }));

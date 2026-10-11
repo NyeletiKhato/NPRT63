@@ -2,7 +2,7 @@
 
 ## Scope and baseline
 
-Reviewed the React/Vite client, Express API, Supabase schema and versioned SQL migrations, private Storage buckets, Render manifest, environment templates, session and MFA code, administrator and reader endpoints, and available npm scripts. The application currently uses a custom `public.users` table with bcrypt passwords and Supabase-backed Express sessions; Supabase Auth is not configured or used by this repository. The service-role key is held by the Node server and is not a Vite variable. `.env` is ignored and is not tracked in the current Git history. No credential literal was found in tracked application source during the targeted scan.
+Reviewed the React/Vite client, Express API, Supabase schema and versioned SQL migrations, private Storage buckets, Render manifest, environment templates, session and MFA code, administrator and reader endpoints, and available npm scripts. Member authentication still uses the custom `public.users` table and Supabase-backed Express sessions. Administrator authentication now uses Supabase Auth, links to the trusted profile table, and requires confirmed email and AAL2 at each admin API request. The service-role key remains server-only; only the public anon/publishable key is exposed to Vite. `.env` is ignored and is not tracked in the current Git history. No credential literal was found in tracked application source during the targeted scan.
 
 Baseline before changes: `npm run build` passed; `node --check backend/server.js` passed; no test script existed. A repository-wide history scan for credentials and live Supabase policy inspection were not available in this environment.
 

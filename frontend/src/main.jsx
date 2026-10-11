@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QRCodeSVG } from 'qrcode.react';
+import { createClient } from '@supabase/supabase-js';
 import libraryBooks from './library-books.svg';
 import './styles.css';
 
 const ReaderPdfDocument = React.lazy(() => import('./ReaderPdfDocument.jsx'));
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseAuth = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey, { auth: { flowType: 'implicit', detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } }) : null;
 
 const emptyBook = {
   title: '',
@@ -101,7 +105,7 @@ function getSouthAfricanPublicHolidays(year) {
   return holidays.sort((left, right) => left.date.localeCompare(right.date));
 }
 
-async function request(path, options = {}, csrfToken = '') {
+async function request(path, options = {}, csrfToken = '', accessToken = '') {
   let response;
   try {
     const { headers: extraHeaders = {}, ...fetchOptions } = options;
@@ -111,6 +115,7 @@ async function request(path, options = {}, csrfToken = '') {
       headers: {
         'Content-Type': 'application/json',
         ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...extraHeaders,
       },
     });
@@ -181,12 +186,22 @@ function App() {
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
-    if (query.get('email_confirmed') === '1') {
+    if (query.get('error') || query.get('error_description')) {
+      setAuthScreen(query.get('admin_setup') === '1' ? 'login-admin' : 'entry');
+      setMessage(query.get('admin_setup') === '1' ? 'This invitation link is invalid or expired. Contact the library operator to send a new invitation.' : 'This sign-in link is invalid or expired. Request a new email and try again.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (query.get('email_confirmed') === '1') {
       setAuthScreen('login-user');
       setMessage('Email confirmed. You can now sign in.');
       window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (query.get('admin_setup') === '1') {
+      setAuthScreen('login-admin');
+      setMessage('Invitation opened. Complete account setup to continue.');
     }
-    request('/api/session/')
+    (async () => {
+      const { data: authData } = await supabaseAuth?.auth.getSession() || { data: { session: null } };
+      return request('/api/session/', {}, '', authData.session?.access_token || '');
+    })()
       .then((data) => {
         setCsrfToken(data.csrfToken);
         setUser(data.user);
@@ -195,24 +210,26 @@ function App() {
           setHistory([{ type: 'view', value: 'dashboard' }]);
           setHistoryIndex(0);
         }
+        if (data.adminSetupRequired || query.get('admin_setup') === '1') setAuthScreen('login-admin');
       })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
   const api = useMemo(() => ({
-    get: (path) => request(path),
-    post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body || {}) }, csrfToken),
-    put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body || {}) }, csrfToken),
-    patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body || {}) }, csrfToken),
+    get: async (path) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, {}, '', data.session?.access_token || ''); },
+    post: async (path, body) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'POST', body: JSON.stringify(body || {}) }, csrfToken, data.session?.access_token || ''); },
+    put: async (path, body) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'PUT', body: JSON.stringify(body || {}) }, csrfToken, data.session?.access_token || ''); },
+    patch: async (path, body) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'PATCH', body: JSON.stringify(body || {}) }, csrfToken, data.session?.access_token || ''); },
     upload: (path, file, onProgress = () => {}) => new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest(); xhr.open('PUT', path); xhr.withCredentials = true; xhr.setRequestHeader('Content-Type', file.type);
+      (async () => { try { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; if (data.session?.access_token) xhr.setRequestHeader('Authorization', `Bearer ${data.session.access_token}`); } catch {} xhr.send(file); })();
       if (csrfToken) xhr.setRequestHeader('X-CSRFToken', csrfToken);
       xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
       xhr.onerror = () => reject(new Error('Could not upload the selected file. Check your connection and try again.'));
       xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if (xhr.status < 200 || xhr.status >= 300) reject(new Error(data.error || 'File upload failed.')); else resolve(data); };
-      xhr.send(file);
     }),
-    delete: (path) => request(path, { method: 'DELETE' }, csrfToken),
+    delete: async (path) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'DELETE' }, csrfToken, data.session?.access_token || ''); },
   }), [csrfToken]);
 
   const showMessage = useCallback((text) => {
@@ -227,6 +244,7 @@ function App() {
     } catch (error) {
       showMessage(error.message);
     } finally {
+      try { await supabaseAuth?.auth.signOut({ scope: 'local' }); } catch {}
       setUser(null);
       setView('dashboard');
       setAuthScreen('entry');
@@ -296,20 +314,7 @@ function App() {
 
 function AuthRoutes({ api, authScreen, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   if (authScreen === 'login-admin') {
-    return (
-      <AuthPanel
-        api={api}
-        mode="login"
-        role="admin"
-        title="Admin Login"
-        setAuthScreen={setAuthScreen}
-        setCsrfToken={setCsrfToken}
-        setUser={setUser}
-        setView={setView}
-        resetHistory={resetHistory}
-        showMessage={showMessage}
-      />
-    );
+    return <AdminAuthPanel api={api} setAuthScreen={setAuthScreen} setUser={setUser} setView={setView} resetHistory={resetHistory} showMessage={showMessage} />;
   }
   if (authScreen === 'login-user') {
     return (
@@ -487,20 +492,119 @@ function EntryScreen({ setAuthScreen }) {
   );
 }
 
+function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, showMessage }) {
+  const [step, setStep] = useState('credentials');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [factor, setFactor] = useState(null);
+  const [qr, setQr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const invitation = new URLSearchParams(window.location.search).get('admin_setup') === '1';
+
+  async function finishAdminLogin() {
+    const active = await api.get('/api/session/');
+    if (!active.user) throw new Error('Email confirmation and MFA must both be complete before administrator access is available.');
+    setUser(active.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' });
+    showMessage('Administrator signed in successfully.');
+  }
+
+  async function prepareMfa() {
+    const { data, error } = await supabaseAuth.auth.mfa.listFactors();
+    if (error) throw error;
+    const verified = data.totp?.find((item) => item.status === 'verified');
+    if (verified) { setFactor(verified); setStep('challenge'); return; }
+    const unfinished = data.totp?.find((item) => item.status === 'unverified');
+    if (unfinished) {
+      const { error: removeError } = await supabaseAuth.auth.mfa.unenroll({ factorId: unfinished.id });
+      if (removeError) throw removeError;
+    }
+    const { data: enrolled, error: enrollError } = await supabaseAuth.auth.mfa.enroll({ factorType: 'totp', issuer: 'Library Management System' });
+    if (enrollError) throw enrollError;
+    setFactor(enrolled); setQr(enrolled.totp?.uri || ''); setStep('setup');
+  }
+
+  async function continueWithSession(session, fromInvitation = false) {
+    let identity = await api.get('/api/session/');
+    if (!identity.adminSetupRequired && fromInvitation) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      identity = await api.get('/api/session/');
+    }
+    if (!identity.adminSetupRequired) throw new Error('This Supabase account has not been provisioned as an active administrator.');
+    setEmail(identity.adminEmail || session.user.email || '');
+    if (fromInvitation) { setStep('password-setup'); return; }
+    if (identity.user) { await finishAdminLogin(); return; }
+    await prepareMfa();
+  }
+
+  useEffect(() => {
+    if (!supabaseAuth) return;
+    supabaseAuth.auth.getSession().then(({ data }) => {
+      if (!data.session) return;
+      continueWithSession(data.session, invitation).catch((error) => showMessage(error.message || 'Administrator setup could not be verified.'));
+    });
+  // The invitation is fixed for this rendered login screen.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function submit(event) {
+    event.preventDefault(); setBusy(true);
+    try {
+      if (!supabaseAuth) throw new Error('Administrator login is not configured. Add the Supabase project URL and public anon key to the frontend build settings.');
+      if (step === 'credentials') {
+        const { data, error } = await supabaseAuth.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+        if (error) throw new Error('Invalid email or password, or the email has not been confirmed.');
+        await continueWithSession(data.session, false);
+      } else if (step === 'password-setup') {
+        if (password.length < 12) throw new Error('Choose a password with at least 12 characters.');
+        const { error } = await supabaseAuth.auth.updateUser({ password });
+        if (error) throw error;
+        setPassword(''); await prepareMfa();
+      } else {
+        if (!factor?.id || !/^\d{6}$/.test(code)) throw new Error('Enter the current six-digit code from your authenticator app.');
+        const { data: challenge, error: challengeError } = await supabaseAuth.auth.mfa.challenge({ factorId: factor.id });
+        if (challengeError) throw challengeError;
+        const { error: verifyError } = await supabaseAuth.auth.mfa.verify({ factorId: factor.id, challengeId: challenge.id, code });
+        if (verifyError) throw new Error('That verification code is incorrect or expired.');
+        await finishAdminLogin();
+      }
+    } catch (error) { showMessage(error.message || 'Administrator sign-in failed.'); }
+    finally { setBusy(false); }
+  }
+
+  async function cancel() {
+    try { await supabaseAuth?.auth.signOut({ scope: 'local' }); } catch {}
+    setStep('credentials'); setPassword(''); setCode(''); setFactor(null); setQr('');
+  }
+
+  return (
+    <section className="auth-page">
+      <div className="auth-copy">
+        <button type="button" className="link-button" onClick={() => setAuthScreen('entry')}>Back to portal</button>
+        <div className="auth-copy-layout"><div className="auth-copy-text"><p className="eyebrow">Library team</p><h2>{step === 'password-setup' ? 'Finish setting up your account.' : step === 'setup' ? 'Secure your administrator account.' : step === 'challenge' ? 'Verify your identity.' : 'Administrator sign in.'}</h2><p>{step === 'password-setup' ? 'Choose a password for your invited administrator account.' : step === 'setup' ? 'Scan the code with an authenticator app, then enter its six-digit code.' : step === 'challenge' ? 'Enter the current code from your authenticator app.' : 'Use the assigned email and password from your Supabase Auth invitation.'}</p></div><img className="auth-art" src={libraryBooks} alt="" /></div>
+      </div>
+      <form className="panel auth-form" onSubmit={submit}>
+        <h3>{step === 'password-setup' ? 'Set your password' : step === 'setup' ? 'Enroll authenticator' : step === 'challenge' ? 'Authenticator verification' : 'Staff sign in'}</h3>
+        {step === 'credentials' && <label>Assigned email<input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>}
+        {step === 'password-setup' && <p className="auth-switch">Invitation for <strong>{email}</strong></p>}
+        {(step === 'credentials' || step === 'password-setup') && <label>{step === 'password-setup' ? 'New password' : 'Password'}<input type="password" autoComplete={step === 'password-setup' ? 'new-password' : 'current-password'} minLength={step === 'password-setup' ? 12 : undefined} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
+        {step === 'setup' && qr && <div className="mfa-setup-code"><QRCodeSVG value={qr} size={190} level="M" includeMargin /><p>Scan this with Google Authenticator, Microsoft Authenticator, or another TOTP app.</p></div>}
+        {(step === 'setup' || step === 'challenge') && <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label>}
+        <button className="primary" type="submit" disabled={busy}>{busy ? 'Please wait…' : step === 'credentials' ? 'Continue' : step === 'password-setup' ? 'Save password' : step === 'setup' ? 'Verify and enable MFA' : 'Verify and sign in'}</button>
+        {step !== 'credentials' && <p className="auth-switch"><button type="button" onClick={cancel}>Cancel setup</button></p>}
+      </form>
+    </section>
+  );
+}
+
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
-  const [mfaStep, setMfaStep] = useState('credentials');
-  const [mfaCode, setMfaCode] = useState('');
-  const [mfaUrl, setMfaUrl] = useState('');
 
   async function submit(event) {
     event.preventDefault();
     try {
       let data;
-      if (mode === 'login' && role === 'admin' && mfaStep !== 'credentials') {
-        const endpoint = mfaStep === 'setup' ? '/api/admin/mfa/confirm-setup/' : '/api/admin/mfa/verify/';
-        data = await api.post(endpoint, { code: mfaCode });
-      } else if (mode === 'register') {
+      if (mode === 'register') {
         const registration = await api.post('/api/register/', form);
         if (!registration.account_created) { showMessage(registration.message || 'You can now sign in.'); setAuthScreen('login-user'); return; }
         data = await api.post('/api/login/', { ...form, role: 'user' });
@@ -508,9 +612,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         data = await api.post('/api/login/', { ...form, role });
       }
       if (data.csrfToken) setCsrfToken(data.csrfToken);
-      if (data.mfa_required) { setMfaStep('challenge'); setMfaCode(''); return; }
-      if (data.mfa_setup_required) { setMfaStep('setup'); const setup = await request('/api/admin/mfa/setup/', { method: 'POST', body: '{}' }, data.csrfToken); setMfaUrl(setup.otpauthUrl); setMfaCode(''); return; }
-      if (!data.user) throw new Error('Admin verification was not completed. Please sign in again.');
+      if (!data.user) throw new Error('Sign-in could not be completed. Please try again.');
       // Verify the browser received a usable persisted session before switching workspaces.
       const activeSession = await request('/api/session/');
       if (!activeSession.user || activeSession.user.id !== data.user.id) throw new Error('Your sign-in could not be saved. Refresh the page and try again.');
@@ -519,7 +621,6 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
     } catch (error) { showMessage(error.message); }
   }
 
-  const mfaFlow = mode === 'login' && role === 'admin' && mfaStep !== 'credentials';
   return (
     <section className="auth-page">
       <div className="auth-copy">
@@ -527,25 +628,19 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
         <div className="auth-copy-layout">
           <div className="auth-copy-text">
             <p className="eyebrow">{mode === 'register' ? 'A new chapter starts here' : role === 'admin' ? 'Library team' : 'Welcome back'}</p>
-            <h2>{mfaStep === 'setup' ? 'Secure your admin account.' : mfaFlow ? 'Verify your identity.' : mode === 'register' ? 'Make yourself at home.' : role === 'admin' ? 'Good to see you.' : 'Ready for your next read?'}</h2>
-            <p>{mfaStep === 'setup' ? 'Scan this code with an authenticator app, then enter its six-digit code.' : mfaFlow ? 'Enter the current six-digit code from your authenticator app.' : mode === 'register' ? 'Create your account and start exploring the collection.' : role === 'admin' ? 'Sign in to care for the collection and support your readers.' : 'Sign in to browse books and pick up where you left off.'}</p>
+            <h2>{mode === 'register' ? 'Make yourself at home.' : 'Ready for your next read?'}</h2>
+            <p>{mode === 'register' ? 'Create your account and start exploring the collection.' : 'Sign in to browse books and pick up where you left off.'}</p>
           </div>
           <img className="auth-art" src={libraryBooks} alt="" />
         </div>
       </div>
       <form className="panel auth-form" onSubmit={submit}>
-        <h3>{mfaStep === 'setup' ? 'Set up authenticator' : mfaStep === 'challenge' ? 'Admin verification' : mode === 'register' ? 'Join the library' : role === 'admin' ? 'Staff sign in' : 'Sign in'}</h3>
-        {!mfaFlow ? <>
-          <label>{mode === 'login' && role === 'user' ? 'Username or email' : 'Username'}<input autoComplete="username" placeholder={mode === 'login' ? 'Enter your username or registered email' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
-          {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
-          <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
-          <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>
-        </> : <>
-          {mfaStep === 'setup' && mfaUrl && <div className="mfa-setup-code"><QRCodeSVG value={mfaUrl} size={190} level="M" includeMargin /><p>Scan with Google Authenticator, Microsoft Authenticator, or another TOTP app.</p></div>}
-          <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required /></label>
-          <button className="primary" type="submit">{mfaStep === 'setup' ? 'Enable and sign in' : 'Verify and sign in'}</button>
-        </>}
-        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : !mfaFlow && role === 'user' ? <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></> : null}
+        <h3>{mode === 'register' ? 'Join the library' : 'Sign in'}</h3>
+        <label>{mode === 'login' ? 'Username or email' : 'Username'}<input autoComplete="username" placeholder={mode === 'login' ? 'Enter your username or registered email' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
+        {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
+        <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+        <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>
+        {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></>}
       </form>
     </section>
   );
@@ -743,7 +838,7 @@ function SystemSettings({api,showMessage}){
   const load=useCallback(()=>{setBusy(true);return Promise.all([api.get('/api/admin/settings/'),api.get('/api/books/?include_unreadable=1')]).then(([settings,result])=>{setBranding(settings.settings.branding||branding);setCatalogue(settings.settings.catalogue||catalogue);setBooks(result.books.filter(book=>book.status!=='archived'));}).catch((error)=>showMessage(error.message)).finally(()=>setBusy(false));},[api,showMessage]);useEffect(()=>{load();},[load]);
   async function save(key,value){setSaving(true);try{const result=await api.put(`/api/admin/settings/${key}/`,{value});if(key==='branding')setBranding(result.value);else setCatalogue(result.value);showMessage('Library settings saved.');}catch(error){showMessage(error.message);}finally{setSaving(false);}}
   function toggleFeatured(id){setCatalogue(current=>({...current,featured_book_ids:current.featured_book_ids.includes(id)?current.featured_book_ids.filter(x=>x!==id):[...current.featured_book_ids,id]}));}
-  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Reader-facing configuration</p><h2>System settings</h2><p>Only supported application settings are editable here. SMTP credentials and security keys remain in server environment settings.</p></div>{busy?<p className="loading-state">Loading settings…</p>:<><form className="form-grid settings-form" onSubmit={(e)=>{e.preventDefault();save('branding',branding);}}><h3>Library identity</h3><label>Library name<input maxLength="100" required value={branding.name} onChange={(e)=>setBranding({...branding,name:e.target.value})}/></label><label>Contact email<input type="email" value={branding.contact_email} onChange={(e)=>setBranding({...branding,contact_email:e.target.value})}/></label><label>Contact phone<input value={branding.contact_phone} onChange={(e)=>setBranding({...branding,contact_phone:e.target.value})}/></label><label>Logo URL (optional)<input type="url" value={branding.logo_url} onChange={(e)=>setBranding({...branding,logo_url:e.target.value})}/></label><button className="primary" disabled={saving}>Save identity</button></form><form className="form-grid settings-form" onSubmit={(e)=>{e.preventDefault();save('catalogue',catalogue);}}><h3>Reader access and homepage</h3><label className="check-label"><input type="checkbox" checked={catalogue.registration_enabled} onChange={(e)=>setCatalogue({...catalogue,registration_enabled:e.target.checked})}/> Allow new member registration</label><h4>Featured books</h4><p className="form-hint">Select up to 12 published books. Selected order is used on the member homepage.</p><div className="featured-settings">{books.filter(book=>book.status==='published'&&book.has_virtual_version).map(book=><label className="check-label" key={book.id}><input type="checkbox" checked={catalogue.featured_book_ids.includes(book.id)} disabled={!catalogue.featured_book_ids.includes(book.id)&&catalogue.featured_book_ids.length>=12} onChange={()=>toggleFeatured(book.id)}/>{book.title}</label>)}</div><button className="primary" disabled={saving}>Save catalogue settings</button></form><div className="data-card"><h3>Email and deployment configuration</h3><p>SMTP host, port, account, app password, session keys, MFA encryption key, and Supabase service-role key must be configured in the server environment on Render or your local .env file. They are never stored in this public settings form.</p></div></>}</section>;
+  return <section className="panel admin-section"><div className="section-heading"><p className="eyebrow">Reader-facing configuration</p><h2>System settings</h2><p>Only supported application settings are editable here. SMTP credentials and security keys remain in server environment settings.</p></div>{busy?<p className="loading-state">Loading settings…</p>:<><form className="form-grid settings-form" onSubmit={(e)=>{e.preventDefault();save('branding',branding);}}><h3>Library identity</h3><label>Library name<input maxLength="100" required value={branding.name} onChange={(e)=>setBranding({...branding,name:e.target.value})}/></label><label>Contact email<input type="email" value={branding.contact_email} onChange={(e)=>setBranding({...branding,contact_email:e.target.value})}/></label><label>Contact phone<input value={branding.contact_phone} onChange={(e)=>setBranding({...branding,contact_phone:e.target.value})}/></label><label>Logo URL (optional)<input type="url" value={branding.logo_url} onChange={(e)=>setBranding({...branding,logo_url:e.target.value})}/></label><button className="primary" disabled={saving}>Save identity</button></form><form className="form-grid settings-form" onSubmit={(e)=>{e.preventDefault();save('catalogue',catalogue);}}><h3>Reader access and homepage</h3><label className="check-label"><input type="checkbox" checked={catalogue.registration_enabled} onChange={(e)=>setCatalogue({...catalogue,registration_enabled:e.target.checked})}/> Allow new member registration</label><h4>Featured books</h4><p className="form-hint">Select up to 12 published books. Selected order is used on the member homepage.</p><div className="featured-settings">{books.filter(book=>book.status==='published'&&book.has_virtual_version).map(book=><label className="check-label" key={book.id}><input type="checkbox" checked={catalogue.featured_book_ids.includes(book.id)} disabled={!catalogue.featured_book_ids.includes(book.id)&&catalogue.featured_book_ids.length>=12} onChange={()=>toggleFeatured(book.id)}/>{book.title}</label>)}</div><button className="primary" disabled={saving}>Save catalogue settings</button></form><div className="data-card"><h3>Email and deployment configuration</h3><p>SMTP credentials, session keys, and the Supabase service-role key must be configured in the server environment on Render or your local .env file. Supabase Auth manages administrator email verification and MFA; these secrets are never stored in this public settings form.</p></div></>}</section>;
 }
 
 function AdminSecurity({api,user,setView,showMessage}){
@@ -767,9 +862,9 @@ function UserManager({ api, reload, showMessage }) {
     <div className="section-heading"><div><p className="eyebrow">Reader directory</p><h2>Reader management</h2><p>Search accounts, review registration dates, and update access. Passwords are never displayed.</p></div></div>
     <form className="filter-bar" onSubmit={(e)=>{e.preventDefault();setPage(0);load();}}><label>Search name or email<input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Username or email"/></label><label>Status<select value={status} onChange={(e)=>{setStatus(e.target.value);setPage(0);}}><option value="all">All statuses</option><option value="active">Active</option><option value="deactivated">Deactivated</option></select></label><label>Role<select value={role} onChange={(e)=>{setRole(e.target.value);setPage(0);}}><option value="all">All roles</option><option value="user">Readers</option><option value="admin">Admins</option></select></label><button className="primary">Search</button></form>
     {busy?<p className="loading-state">Loading reader accounts…</p>:<div className="table">{users.length?users.map((item)=><div className="row user-row" key={item.id}>
-        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.email_verified?'Email confirmed':'Email not verified · sign-in allowed'}</small></div>
+        <div><strong>{item.username}</strong><span>{item.email||'No email'} · Joined {item.created_at?new Date(item.created_at).toLocaleDateString():'date unavailable'}</span><small>{item.role==='admin'?'Email verification enforced by Supabase Auth':item.email_verified?'Email confirmed':'Email not verified · sign-in allowed'}</small></div>
         <span className={`badge ${!item.is_active?'danger-badge':''}`}>{item.role==='admin'?'Administrator':item.is_active?'Active reader':'Deactivated'}</span>
-        <div className="button-row">{item.role==='user'?<><button type="button" className="secondary" onClick={()=>setAccount(item,{is_active:!item.is_active})}>{item.is_active?'Deactivate':'Activate'}</button><button type="button" className="secondary" disabled={!item.email} onClick={async()=>{try{const result=await api.post(`/api/admin/users/${item.id}/recovery/`);showMessage(result.message);}catch(error){showMessage(error.message);}}}>Send recovery</button><button type="button" className="secondary" onClick={()=>{if(window.confirm(`Promote ${item.username} to administrator? They will need to set up two-factor authentication at their next login.`))setAccount(item,{role:'admin'});}}>Promote</button><button type="button" className="danger" onClick={()=>removeUser(item)}>Delete</button></>:<span className="admin-protected">Protected administrator</span>}</div>
+        <div className="button-row">{item.role==='user'?<><button type="button" className="secondary" onClick={()=>setAccount(item,{is_active:!item.is_active})}>{item.is_active?'Deactivate':'Activate'}</button><button type="button" className="secondary" disabled={!item.email} onClick={async()=>{try{const result=await api.post(`/api/admin/users/${item.id}/recovery/`);showMessage(result.message);}catch(error){showMessage(error.message);}}}>Send recovery</button><button type="button" className="danger" onClick={()=>removeUser(item)}>Delete</button></>:<span className="admin-protected">Protected administrator</span>}</div>
       </div>):<p className="empty-state">No accounts match these filters.</p>}</div>}
     <div className="pagination"><span>{total} accounts</span><button className="secondary" disabled={page===0} onClick={()=>setPage(page-1)}>Previous</button><span>Page {page+1}</span><button className="secondary" disabled={(page+1)*50>=total} onClick={()=>setPage(page+1)}>Next</button></div>
   </section>;

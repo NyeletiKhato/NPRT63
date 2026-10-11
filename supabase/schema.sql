@@ -15,7 +15,7 @@ create table if not exists public.users (
   admin_mfa_enabled boolean not null default false,
   created_at timestamptz not null default now()
 );
--- Django allowed repeated email addresses; username is the account identifier.
+-- Usernames are the unique account identifiers; email addresses may be shared.
 drop index if exists public.users_email_unique;
 alter table public.users alter column email_verified set default false;
 

@@ -1,6 +1,5 @@
 -- Run in Supabase SQL Editor if account creation or sign-in returns an
 -- unexpected server error because the service_role cannot access tables.
--- The legacy Django data also permits duplicate email addresses.
 drop index if exists public.users_email_unique;
 grant usage on schema public to service_role;
 grant select, insert, update, delete on all tables in schema public to service_role;

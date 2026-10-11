@@ -4,6 +4,10 @@
     "server": "node backend/server.js",
     "start": "node backend/server.js",
     "migrate-django-data": "node backend/migrate-django-data.js",
+    "admin:provision": "node scripts/provision-admin.js",
+    "admin:resend-invite": "node scripts/resend-admin-invite.js",
+    "admin:reset-preview": "node scripts/reset-admins.js",
+    "admin:reset": "node scripts/reset-admins.js --apply",
     "test": "node --test",
     "build": "vite build --configLoader runner",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --configLoader runner"
