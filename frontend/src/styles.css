@@ -1159,7 +1159,7 @@ select {
 .user-row { grid-template-columns: minmax(180px, 1fr) auto auto; gap: 16px; }
 .user-row > div { display: grid; gap: 4px; }
 .admin-protected { color: #64748b; font-size: .82rem; font-weight: 700; padding: 0 14px; }
-.account-panel { align-self: center; flex: 0 0 auto; max-width: 840px; min-height: 0; }
+.account-panel { align-self: stretch; flex: 0 0 auto; max-width: none; min-height: 0; width: 100%; }
 .profile-photo-editor { align-items: center; background: #f5fbf8; border: 1px solid #d5e9e0; border-radius: 12px; display: grid; gap: 20px; grid-template-columns: 100px minmax(0, 1fr); margin-top: 24px; max-width: 100%; padding: 20px; width: 100%; }
 .profile-photo-preview { font-size: 2rem; height: 100px; width: 100px; }
 .profile-photo-preview img { height: 100%; object-fit: cover; width: 100%; }
