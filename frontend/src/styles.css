@@ -1808,3 +1808,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 380px) {
   .analytics-stat-grid { grid-template-columns: minmax(0, 1fr); }
 }
+.tabs {
+  align-self: stretch;
+  flex-wrap: wrap;
+  justify-content: center;
+  overflow: visible;
+  width: 100%;
+}
+.tabs button { flex: 1 1 120px; max-width: 200px; text-align: center; white-space: nowrap; }
+@media (max-width: 600px) {
+  .tabs { gap: 6px; }
+  .tabs button { flex: 1 1 110px; max-width: none; min-width: 0; padding: 0 10px; }
+}
