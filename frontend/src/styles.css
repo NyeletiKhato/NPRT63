@@ -1863,3 +1863,42 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .tabs { gap: 6px; }
   .tabs button { flex: 1 1 110px; max-width: none; min-width: 0; padding: 0 10px; }
 }
+
+/* Shared typography, spacing, and control sizing across the full application. */
+:root {
+  --font-interface: "Segoe UI", Arial, Helvetica, sans-serif;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+}
+html { font-size: 16px; }
+body, button, input, select, textarea { font-family: var(--font-interface); }
+body { font-size: 1rem; font-weight: 450; letter-spacing: .005em; line-height: 1.6; }
+h1, h2, h3, h4, strong, b { font-weight: 750; line-height: 1.25; }
+p { line-height: 1.6; }
+small, .form-hint, .form-grid label small, .profile-role, .profile-photo-editor small { font-size: .875rem; line-height: 1.5; }
+label { line-height: 1.5; }
+button, .button-link { font-size: .95rem; font-weight: 650; min-height: 44px; }
+input, select, textarea { font-size: 1rem; line-height: 1.5; }
+.screen { padding: clamp(16px, 2vw, 28px); }
+.app-content { gap: var(--space-5); }
+.dashboard, .books-page, .recommendations-page, .admin-section { gap: var(--space-6); }
+.section-heading { gap: var(--space-2); }
+.form-grid { gap: var(--space-4); }
+.book-grid, .reader-list, .category-reader-grid { gap: var(--space-4); }
+.panel, .data-card, .book-card, .reader-shelf, .category-reader-card { border-radius: 16px; }
+.panel { padding: clamp(20px, 2.2vw, 30px); }
+.data-card, .book-card { padding: var(--space-4); }
+.eyebrow { font-size: .78rem; font-weight: 750; }
+.tabs button { font-size: .95rem; min-height: 44px; }
+.book-card h3 { font-size: 1.1rem; }
+.book-card p, .book-card span, .book-card small { font-size: .9rem; }
+@media (max-width: 600px) {
+  body { font-size: 1rem; }
+  .screen { padding: 12px; }
+  .panel { padding: 18px; }
+  .tabs button { padding-inline: 14px; }
+}
