@@ -504,6 +504,7 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
   const [factor, setFactor] = useState(null);
   const [qr, setQr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [credentialsUnlocked, setCredentialsUnlocked] = useState(false);
   const setupFlow = ['admin_setup', 'admin_recovery'].some((key) => new URLSearchParams(window.location.search).get(key) === '1');
 
   async function finishAdminLogin() {
@@ -602,11 +603,11 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
         <button type="button" className="link-button" onClick={() => setAuthScreen('entry')}>Back to portal</button>
         <div className="auth-copy-layout"><div className="auth-copy-text"><p className="eyebrow">Library team</p><h2>{step === 'password-setup' ? 'Choose a new password.' : step === 'setup' ? 'Secure your administrator account.' : step === 'challenge' ? 'Verify your identity.' : 'Administrator sign in.'}</h2><p>{step === 'password-setup' ? 'Set a new password for your administrator account.' : step === 'setup' ? 'Scan the code with an authenticator app, then enter its six-digit code.' : step === 'challenge' ? 'Enter the current code from your authenticator app.' : 'Use the assigned email and password for your administrator account.'}</p></div><img className="auth-art" src={libraryBooks} alt="" /></div>
       </div>
-      <form className="panel auth-form" onSubmit={submit}>
+      <form className="panel auth-form" autoComplete="off" onFocusCapture={() => { if (step === 'credentials') setCredentialsUnlocked(true); }} onSubmit={submit}>
         <h3>{step === 'password-setup' ? 'Set your password' : step === 'setup' ? 'Enroll authenticator' : step === 'challenge' ? 'Authenticator verification' : 'Staff sign in'}</h3>
-        {step === 'credentials' && <label>Assigned email<input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>}
+        {step === 'credentials' && <label>Assigned email<input type="email" name="admin-login-email" autoComplete="off" readOnly={!credentialsUnlocked} required value={email} onChange={(event) => setEmail(event.target.value)} /></label>}
         {step === 'password-setup' && <p className="auth-switch">Administrator account: <strong>{email}</strong></p>}
-        {(step === 'credentials' || step === 'password-setup') && <label>{step === 'password-setup' ? 'New password' : 'Password'}<input type="password" autoComplete={step === 'password-setup' ? 'new-password' : 'current-password'} minLength={step === 'password-setup' ? 12 : undefined} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
+        {(step === 'credentials' || step === 'password-setup') && <label>{step === 'password-setup' ? 'New password' : 'Password'}<input type="password" name={step === 'password-setup' ? 'admin-new-password' : 'admin-login-password'} autoComplete={step === 'password-setup' ? 'new-password' : 'off'} readOnly={step === 'credentials' && !credentialsUnlocked} minLength={step === 'password-setup' ? 12 : undefined} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
         {step === 'setup' && qr && <div className="mfa-setup-code"><QRCodeSVG value={qr} size={190} level="M" includeMargin /><p>Scan this with Google Authenticator, Microsoft Authenticator, or another TOTP app.</p></div>}
         {(step === 'setup' || step === 'challenge') && <label>Six-digit code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label>}
         <button className="primary" type="submit" disabled={busy}>{busy ? 'Please wait…' : step === 'credentials' ? 'Continue' : step === 'password-setup' ? 'Save password' : step === 'setup' ? 'Verify and enable MFA' : 'Verify and sign in'}</button>
@@ -619,6 +620,7 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
 
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
+  const [loginFieldsUnlocked, setLoginFieldsUnlocked] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
@@ -657,11 +659,11 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
           <img className="auth-art" src={libraryBooks} alt="" />
         </div>
       </div>
-      <form className="panel auth-form" onSubmit={submit}>
+      <form className="panel auth-form" autoComplete={mode === 'login' ? 'off' : undefined} onFocusCapture={() => { if (mode === 'login') setLoginFieldsUnlocked(true); }} onSubmit={submit}>
         <h3>{mode === 'register' ? 'Join the library' : 'Sign in'}</h3>
-        <label>{mode === 'login' ? 'Username or email' : 'Username'}<input autoComplete="username" placeholder={mode === 'login' ? 'Enter your username or registered email' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
+        <label>{mode === 'login' ? 'Username or email' : 'Username'}<input name={mode === 'login' ? 'reader-login-identifier' : 'username'} autoComplete={mode === 'login' ? 'off' : 'username'} readOnly={mode === 'login' && !loginFieldsUnlocked} placeholder={mode === 'login' ? 'Enter your username or registered email' : ''} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
         {mode === 'register' && <label>Email<input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>}
-        <label>Password<input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+        <label>Password<input type="password" name={mode === 'login' ? 'reader-login-password' : 'new-password'} autoComplete={mode === 'register' ? 'new-password' : 'off'} readOnly={mode === 'login' && !loginFieldsUnlocked} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
         <button className="primary" type="submit">{mode === 'register' ? 'Create account' : 'Continue'}</button>
         {mode === 'register' ? <p className="auth-switch">Already have an account? <button type="button" onClick={() => setAuthScreen('login-user')}>Login</button></p> : <><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('password-reset')}>Forgot password?</button></p><p className="auth-switch"><button type="button" onClick={() => setAuthScreen('resend-confirmation')}>Didn't receive your confirmation email?</button></p><p className="auth-switch">Do not have an account? <button type="button" onClick={() => setAuthScreen('signup')}>Register</button></p></>}
       </form>
