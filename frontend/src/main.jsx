@@ -134,6 +134,8 @@ function App() {
   const [user, setUser] = useState(null);
   const [view, setView] = useState('dashboard');
   const [authScreen, setAuthScreen] = useState('entry');
+  const [assistantDetailsBook, setAssistantDetailsBook] = useState(null);
+  const [assistantReaderBook, setAssistantReaderBook] = useState(null);
   const [history, setHistory] = useState([{ type: 'auth', value: 'entry' }]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [message, setMessage] = useState('');
@@ -309,6 +311,9 @@ function App() {
         </>
       )}
       </div>
+      {user?.role === 'user' && <LibraryAssistant api={api} onOpenBook={book => setAssistantDetailsBook(book)} />}
+      {assistantDetailsBook && <BookDetails api={api} book={assistantDetailsBook} books={[assistantDetailsBook]} onRead={book => { setAssistantDetailsBook(null); setAssistantReaderBook(book); }} onClose={() => setAssistantDetailsBook(null)} showMessage={showMessage} />}
+      {assistantReaderBook && <BookReader api={api} book={assistantReaderBook} onClose={() => setAssistantReaderBook(null)} showMessage={showMessage} />}
     </main>
   );
 }
@@ -789,6 +794,75 @@ function UserWorkspace({ api, user, onUserChange, view, setView, showMessage, on
     return <AccountSettings api={api} user={user} onUserChange={onUserChange} onDeactivated={onDeactivated} showMessage={showMessage} />;
   }
   return <BookBrowser api={api} canRead showMessage={showMessage} />;
+}
+
+function LibraryAssistant({ api, onOpenBook }) {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [messages, setMessages] = useState([{ id: 'welcome', role: 'assistant', type: 'faq', answer: 'Hello! I can search the published catalogue, recommend books by topic, and help with reading or account questions.' }]);
+  const inputRef = React.useRef(null);
+  const endRef = React.useRef(null);
+  const prompts = [
+    'Find books about cybersecurity.',
+    'Recommend a book for learning programming.',
+    'Find books by a particular author.',
+    'How do I open a book?',
+    'How do I reset my password?',
+  ];
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages, busy]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeOnEscape = event => { if (event.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [open]);
+
+  async function send(message = input) {
+    const question = message.trim();
+    if (!question || busy) return;
+    setInput('');
+    setMessages(current => [...current, { id: `member-${Date.now()}`, role: 'member', answer: question }].slice(-19));
+    setBusy(true);
+    try {
+      const result = await api.post('/api/chatbot/message/', { message: question });
+      setMessages(current => [...current, { id: `assistant-${Date.now()}`, role: 'assistant', type: result.type, answer: result.answer, books: result.books || [] }].slice(-20));
+    } catch (error) {
+      setMessages(current => [...current, { id: `error-${Date.now()}`, role: 'assistant', type: 'error', answer: error.message || 'The Library Assistant could not respond. Please try again.' }].slice(-20));
+    } finally { setBusy(false); }
+  }
+
+  return <div className="library-assistant">
+    {open && <section id="library-assistant-panel" className="library-assistant-panel" role="dialog" aria-label="Library Assistant" aria-modal="false">
+      <header className="library-assistant-header"><div><strong>Library Assistant</strong><small>Book discovery and library help</small></div><button type="button" className="library-assistant-close" onClick={() => setOpen(false)} aria-label="Close Library Assistant">×</button></header>
+      <p className="library-assistant-note">Answers come from library guidance and the published, readable catalogue.</p>
+      <div className="library-assistant-log" role="log" aria-live="polite" aria-relevant="additions text">
+        {messages.map(message => <article className={`library-assistant-message ${message.role}${message.type === 'error' ? ' error' : ''}`} key={message.id}>
+          <span>{message.role === 'member' ? 'You' : 'Library Assistant'}</span>
+          <p>{message.answer}</p>
+          {message.books?.length > 0 && <div className="library-assistant-results" aria-label="Catalogue matches">{message.books.map(book => <article className="library-assistant-book" key={book.id}>
+            {book.cover_url ? <img src={book.cover_url} alt={`${book.title} cover`} loading="lazy"/> : <div className="library-assistant-cover-placeholder" aria-hidden="true">Book</div>}
+            <div><strong>{book.title}</strong><span>{book.author}</span><small>{book.category || 'Uncategorized'} · {book.virtual_file_type === 'application/pdf' ? 'PDF' : 'TXT'} · Read online</small><button type="button" onClick={() => { setOpen(false); onOpenBook(book); }}>Book details</button></div>
+          </article>)}</div>}
+        </article>)}
+        {busy && <p className="library-assistant-loading" role="status"><span className="assistant-spinner"/>Searching the library…</p>}
+        <div ref={endRef}/>
+      </div>
+      {messages.length === 1 && <div className="library-assistant-prompts" aria-label="Suggested questions">{prompts.map(prompt => <button type="button" key={prompt} disabled={busy} onClick={() => send(prompt)}>{prompt}</button>)}</div>}
+      <form className="library-assistant-form" onSubmit={event => { event.preventDefault(); send(); }}>
+        <label className="sr-only" htmlFor="library-assistant-question">Ask the Library Assistant</label>
+        <input id="library-assistant-question" ref={inputRef} value={input} maxLength={500} onChange={event => setInput(event.target.value)} placeholder="Ask about books or library help…" disabled={busy}/>
+        <button type="submit" className="primary" disabled={busy || !input.trim()} aria-label="Send message">Send</button>
+      </form>
+    </section>}
+    <button type="button" className="library-assistant-toggle" aria-expanded={open} aria-controls="library-assistant-panel" onClick={() => setOpen(value => !value)} aria-label={open ? 'Close Library Assistant' : 'Open Library Assistant'}>
+      <span aria-hidden="true">{open ? '×' : '✦'}</span><span>{open ? 'Close' : 'Library Assistant'}</span>
+    </button>
+  </div>;
 }
 
 function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage }) {

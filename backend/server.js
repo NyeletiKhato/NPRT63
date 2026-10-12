@@ -11,6 +11,7 @@ const { validateBookFile, validateCoverFile } = require('./file-validation');
 const { isValidDatabaseId, isValidUnsignedInteger } = require('./request-validation');
 const { normalizeEmail, isValidEmail } = require('./email-validation');
 const { canAccessAdminApi } = require('./admin-auth-policy');
+const { answerCatalogueQuestion, buildFaqAnswer, matchFaq, validateAssistantMessage } = require('./library-assistant');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -139,6 +140,7 @@ const adminPasswordRecoveryLimiter = rateLimit((req) => ['admin-password-recover
 const newsletterLimiter = rateLimit((req) => ['newsletter-ip:' + ipKey(req)], 10, 3600, 'Too many newsletter requests. Try again later.');
 const resetLimiter = rateLimit((req) => ['reset-ip:' + ipKey(req), 'reset-user:' + String(req.body.username || '').trim().toLowerCase()], 5, 900, 'Too many password reset attempts. Wait 15 minutes and try again.');
 const searchLimiter = rateLimit((req) => ['search-user:' + String(req.session?.userId || ipKey(req))], 120, 60, 'Too many catalogue searches. Please wait a moment and try again.');
+const chatbotLimiter = rateLimit((req) => [`chatbot-user:${req.user.id}`], 20, 60, 'The Library Assistant is receiving too many requests. Please wait a minute and try again.');
 const uploadLimiter = rateLimit((req) => ['upload-user:' + String(req.session?.userId || ipKey(req))], 20, 900, 'Too many file uploads. Please wait and try again.');
 async function clearRateLimits(parts) { for (const part of parts) { const bucket = crypto.createHmac('sha256', sessionSecret).update(part).digest('hex'); const { error } = await db.rpc('clear_security_rate_limit', { p_bucket: bucket }); if (error) throw error; } }
 
@@ -234,6 +236,7 @@ app.get('/api/health/ready/', endpoint(async (req, res) => {
   }
   res.json({ status: 'ready' });
 }));
+app.use('/api/chatbot/message/', express.json({ limit: '4kb' }));
 app.use(express.json({ limit: '3mb' }));
 app.use(express.urlencoded({ extended: false, limit: '10kb' }));
 app.use('/api', (req, res, next) => {
@@ -267,6 +270,41 @@ app.get('/api/session/', endpoint(async (req, res) => {
     return res.json({ user: assurance?.currentLevel === 'aal2' ? safeUser({ ...profile, email: identity.user.email, auth_email_confirmed: true }) : null, adminSetupRequired: true, adminEmail: identity.user.email, adminUsername: profile.username, mfaRequired: true, mfaEnrolled: Boolean(identity.user.factors?.some((factor) => factor.status === 'verified')) });
   }
   req.session.csrfToken ||= newCsrfToken(); const user = req.session.userId ? await getUser(req.session.userId) : null; const authenticatedAt = Number(req.session.authenticatedAt); const sessionValid = Number.isFinite(authenticatedAt) && Date.now() - authenticatedAt <= MAX_SESSION_AGE_MS; if (user && (!sessionValid || !user.is_active || user.role === 'admin')) req.session.destroy(() => {}); res.json({ csrfToken: req.session.csrfToken, user: user?.is_active && sessionValid && user.role !== 'admin' ? safeUser(user) : null });
+}));
+app.post('/api/chatbot/message/', requireAuth, requireRole('user'), chatbotLimiter, endpoint(async (req, res) => {
+  if (Object.keys(req.body || {}).length !== 1 || !Object.hasOwn(req.body || {}, 'message')) return res.status(400).json({ error: 'Send only a message to the Library Assistant.' });
+  const checked = validateAssistantMessage(req.body.message);
+  if (checked.error) return res.status(400).json({ error: checked.error });
+  const faq = matchFaq(checked.message);
+  if (faq) {
+    let contact = {};
+    if (faq.id === 'contact-library') {
+      const branding = await one('library_settings', db.from('library_settings').select('setting_value').eq('setting_key', 'branding').maybeSingle());
+      contact = { email: branding?.setting_value?.contact_email, phone: branding?.setting_value?.contact_phone };
+    }
+    return res.json({ type: 'faq', answer: buildFaqAnswer(faq, contact), books: [] });
+  }
+  const books = await many('books', db.from('books').select('id,title,author,category,description,tags,status,virtual_file_path,virtual_file_type,cover_path,category_id,publication_year,publisher,isbn,language,file_size').eq('status', 'published').not('virtual_file_path', 'is', null).neq('virtual_file_path', '').order('title').range(0, 999));
+  const result = answerCatalogueQuestion(checked.message, books);
+  const publicBooks = result.books.map((book) => ({
+    id: book.id,
+    title: book.title,
+    author: book.author,
+    category: book.category,
+    description: book.description,
+    tags: Array.isArray(book.tags) ? book.tags : [],
+    cover_url: book.cover_path ? `/api/books/${book.id}/cover/` : '',
+    category_id: book.category_id,
+    publication_year: book.publication_year,
+    publisher: book.publisher,
+    isbn: book.isbn,
+    language: book.language,
+    file_size: book.file_size,
+    virtual_file_type: book.virtual_file_type,
+    has_virtual_version: true,
+    has_cover: Boolean(book.cover_path),
+  }));
+  res.json({ ...result, books: publicBooks });
 }));
 if (process.env.NODE_ENV !== 'production') app.get('/api/network-address/', (_req, res) => { const ips = Object.values(os.networkInterfaces()).flatMap((x) => x || []).filter((x) => x.family === 'IPv4' && !x.internal).map((x) => x.address); res.json({ address: ips[0] || null }); });
 app.post('/api/newsletter/subscribe/', newsletterLimiter, endpoint(async (req, res) => { const email = String(req.body.email || '').trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' }); const { error } = await db.from('newsletter_subscriptions').upsert({ email }, { onConflict: 'email', ignoreDuplicates: true }); fail(error); res.status(201).json({ message: 'You are subscribed to library updates.' }); }));
