@@ -2039,6 +2039,13 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 .book-author-option > span { display: grid; gap: 3px; min-width: 0; }
 .book-author-option strong, .book-author-option small { overflow-wrap: anywhere; }
 .book-author-option small { color: var(--library-muted); font-size: .82rem; }
+.user-manager .table .user-row {
+  gap: 16px 22px;
+  padding: 22px 24px;
+}
+.user-manager .table .user-row > div:first-child { gap: 8px; }
+.user-manager .table .user-row .button-row { gap: 10px; }
 @media (max-width: 600px) {
   .audit-row { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .user-manager .table .user-row { padding: 18px; }
 }
