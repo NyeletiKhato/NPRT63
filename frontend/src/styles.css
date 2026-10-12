@@ -2045,6 +2045,16 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 }
 .user-manager .table .user-row > div:first-child { gap: 8px; }
 .user-manager .table .user-row .button-row { gap: 10px; }
+.user-manager .filter-bar {
+  background: #f7f9f4;
+  border: 1px solid var(--library-line);
+  border-radius: 14px;
+  margin: 0;
+  padding: 18px;
+}
+.user-manager .filter-bar label { gap: 8px; min-width: 0; }
+.user-manager .filter-bar input,
+.user-manager .filter-bar select { min-width: 0; }
 .analytics-controls {
   align-items: end;
   display: flex;
@@ -2065,6 +2075,7 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 @media (max-width: 600px) {
   .audit-row { grid-template-columns: minmax(0, 1fr); padding: 16px; }
   .user-manager .table .user-row { padding: 18px; }
+  .user-manager .filter-bar { padding: 14px; }
   .analytics-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; }
   .analytics-period { min-width: 0; }
 }
