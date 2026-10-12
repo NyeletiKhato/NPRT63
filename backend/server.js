@@ -84,6 +84,11 @@ const logEvent = (level, event, fields = {}) => console[level](JSON.stringify({ 
 const fail = (error) => { if (error) throw error; };
 const one = async (table, query) => { const { data, error } = await query; fail(error); return data; };
 const many = async (table, query) => { const { data, error } = await query; fail(error); return data || []; };
+function legacyBookCreditsAuthor(bookAuthor, authorName) {
+  const escaped=String(authorName||'').trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(!escaped)return false;
+  return new RegExp(`(?:^|[,;|]\\s*)${escaped}(?=$|\\s*[,;|])`,'i').test(String(bookAuthor||'').replace(/\s+/g,' ').trim());
+}
 const getUser = async (id) => one('users', db.from('users').select('*').eq('id', id).maybeSingle());
 const getBook = async (id) => one('books', db.from('books').select('*').eq('id', id).maybeSingle());
 const safeUser = (u) => u && ({ id: u.id, username: u.username, email: u.email, role: u.role, is_active: u.is_active, email_verified: u.role === 'admin' ? Boolean(u.auth_email_confirmed) : u.email_verified, created_at:u.created_at, profile_photo: u.profile_photo || '', is_authenticated: true });
@@ -493,7 +498,7 @@ app.get('/api/books/', requireAuth, (req, res, next) => {
   if (!adminAll) q = q.eq('status', 'published').not('virtual_file_path', 'is', null).neq('virtual_file_path', '');
   if (req.query.q) { const term = String(req.query.q).replace(/[(),%_]/g, ' ').trim().slice(0, 80); if (term) q = q.or(['title','author','category','isbn','description','publisher','language'].map((k) => `${k}.ilike.%${term}%`).join(',')); }
   if (req.query.category) q = q.eq('category_id', req.query.category);
-  if (req.query.author) { const links=await many('book_authors',db.from('book_authors').select('book_id').eq('author_id',req.query.author));const ids=[...new Set(links.map(link=>link.book_id))];if(!ids.length)return res.json({books:[],total:0,page,limit,pages:0});q=q.in('id',ids); }
+  if (req.query.author) { const author=await one('authors',db.from('authors').select('id,name').eq('id',req.query.author).maybeSingle());const [links,legacyBooks]=await Promise.all([many('book_authors',db.from('book_authors').select('book_id').eq('author_id',req.query.author)),author?many('books',db.from('books').select('id,author')):Promise.resolve([])]);const ids=[...new Set([...links.map(link=>link.book_id),...legacyBooks.filter(book=>legacyBookCreditsAuthor(book.author,author?.name)).map(book=>book.id)])];if(!ids.length)return res.json({books:[],total:0,page,limit,pages:0});q=q.in('id',ids); }
   if (req.query.language) q = q.ilike('language', String(req.query.language).slice(0, 40));
   const yearMin = Number.parseInt(req.query.year_min || '', 10), yearMax = Number.parseInt(req.query.year_max || '', 10);
   if (Number.isInteger(yearMin)) q = q.gte('publication_year', yearMin);
@@ -508,7 +513,7 @@ app.get('/api/books/', requireAuth, (req, res, next) => {
     const counts = new Map(); for (const event of events) counts.set(event.book_id, (counts.get(event.book_id) || 0) + 1);
     books.sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0) || a.title.localeCompare(b.title)); books = books.slice(page * limit, page * limit + limit);
   }
-  if(adminAll&&books.length){const links=await many('book_authors',db.from('book_authors').select('book_id,author_id,position').in('book_id',books.map(book=>book.id)).order('position'));const grouped=new Map();for(const link of links)grouped.set(link.book_id,[...(grouped.get(link.book_id)||[]),link.author_id]);books=books.map(book=>({...safeBook(book),author_ids:grouped.get(book.id)||[book.author_id].filter(Boolean)}));}
+  if(adminAll&&books.length){const [links,authors]=await Promise.all([many('book_authors',db.from('book_authors').select('book_id,author_id,position').in('book_id',books.map(book=>book.id)).order('position')),many('authors',db.from('authors').select('id,name'))]);const grouped=new Map();for(const link of links)grouped.set(link.book_id,[...(grouped.get(link.book_id)||[]),link.author_id]);books=books.map(book=>{const authorIds=grouped.get(book.id)||[book.author_id].filter(Boolean);return {...safeBook(book),author_ids:authorIds.length?authorIds:authors.filter(author=>legacyBookCreditsAuthor(book.author,author.name)).map(author=>author.id)};});}
   res.json({ books: books.map(safeBook), total: result.count || 0, page, limit, pages: Math.ceil((result.count || 0) / limit) });
 }));
 app.get('/api/admin/books/', requireAuth, requireRole('admin'), endpoint(async(req,res)=>{
@@ -620,8 +625,8 @@ app.get('/api/reader/categories/', requireAuth, requireRole('user'), endpoint(as
   res.json({categories:categories.map(category=>({...category,book_count:books.filter(book=>book.category_id===category.id).length}))});
 }));
 app.get('/api/reader/authors/', requireAuth, requireRole('user'), endpoint(async(_req,res)=>{
-  const [authors,links,books]=await Promise.all([many('authors',db.from('authors').select('id,name,biography').order('name')),many('book_authors',db.from('book_authors').select('author_id,book_id')),many('books',db.from('books').select('id').eq('status','published').not('virtual_file_path','is',null).neq('virtual_file_path',''))]);
-  const available=new Set(books.map(book=>book.id));res.json({authors:authors.map(author=>({...author,book_count:new Set(links.filter(link=>link.author_id===author.id&&available.has(link.book_id)).map(link=>link.book_id)).size})).filter(author=>author.book_count>0)});
+  const [authors,links,books]=await Promise.all([many('authors',db.from('authors').select('id,name,biography').order('name')),many('book_authors',db.from('book_authors').select('author_id,book_id')),many('books',db.from('books').select('id,author').eq('status','published').not('virtual_file_path','is',null).neq('virtual_file_path',''))]);
+  const available=new Map(books.map(book=>[book.id,book]));res.json({authors:authors.map(author=>({...author,book_count:new Set([...links.filter(link=>link.author_id===author.id&&available.has(link.book_id)).map(link=>link.book_id),...books.filter(book=>legacyBookCreditsAuthor(book.author,author.name)).map(book=>book.id)]).size})).filter(author=>author.book_count>0)});
 }));
 app.get('/api/reader/home/', requireAuth, requireRole('user'), endpoint(async(req,res)=>{
   const since=new Date(Date.now()-30*86400000).toISOString();
@@ -743,7 +748,7 @@ app.delete('/api/admin/categories/:id/', requireAuth, requireRole('admin'), endp
   await writeAudit(req,'category_deleted','category',category.id,{name:category.name});fail((await db.from('categories').delete().eq('id',category.id)).error);res.json({ok:true});
 }));
 app.get('/api/admin/authors/', requireAuth, requireRole('admin'), endpoint(async (_req,res)=>{
-  const [authors,links]=await Promise.all([many('authors',db.from('authors').select('*').order('name')),many('book_authors',db.from('book_authors').select('author_id,book_id'))]);res.json({authors:authors.map((item)=>({...item,book_count:new Set(links.filter((link)=>link.author_id===item.id).map(link=>link.book_id)).size}))});
+  const [authors,links,books]=await Promise.all([many('authors',db.from('authors').select('*').order('name')),many('book_authors',db.from('book_authors').select('author_id,book_id')),many('books',db.from('books').select('id,author'))]);const bookIdsByAuthor=new Map();for(const link of links)bookIdsByAuthor.set(link.author_id,new Set([...(bookIdsByAuthor.get(link.author_id)||[]),link.book_id]));res.json({authors:authors.map(item=>{const ids=new Set([...(bookIdsByAuthor.get(item.id)||[]),...books.filter(book=>legacyBookCreditsAuthor(book.author,item.name)).map(book=>book.id)]);return {...item,book_count:ids.size};})});
 }));
 async function authorNameExists(name, excludeId = null) {
   const normalized=String(name).trim().replace(/\s+/g,' ').toLowerCase();
