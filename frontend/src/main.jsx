@@ -509,6 +509,7 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
   async function finishAdminLogin() {
     const active = await api.get('/api/session/');
     if (!active.user) throw new Error('Email confirmation and MFA must both be complete before administrator access is available.');
+    setEmail(''); setPassword(''); setCode(''); setFactor(null); setQr('');
     setUser(active.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' });
     showMessage('Administrator signed in successfully.');
   }
@@ -625,6 +626,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       let data;
       if (mode === 'register') {
         const registration = await api.post('/api/register/', form);
+        setForm({ username: '', email: '', password: '' });
         showMessage(registration.message || 'Account created. Check your inbox for a confirmation link before signing in.');
         setAuthScreen('login-user');
         return;
@@ -637,6 +639,7 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       const activeSession = await request('/api/session/');
       if (!activeSession.user || activeSession.user.id !== data.user.id) throw new Error('Your sign-in could not be saved. Refresh the page and try again.');
       if (activeSession.csrfToken) setCsrfToken(activeSession.csrfToken);
+      setForm({ username: '', email: '', password: '' });
       setUser(activeSession.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' }); showMessage(mode === 'register' ? 'Account created and signed in.' : 'Signed in successfully.');
     } catch (error) { showMessage(error.message); }
   }
