@@ -1954,3 +1954,53 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 @media (max-width: 600px) {
   .admin-section:not(.category-manager) .entity-row { gap: 12px; padding: 16px; }
 }
+
+/* Keep content blocks separated and protect compact cards from text overflow. */
+.admin-section {
+  align-content: start;
+  display: grid;
+  gap: var(--space-6);
+}
+.data-card, .stat, .dashboard-card, .entry-card, .book-card, .reader-list-row,
+.admin-account-row, .audit-row, .category-reader-card, .user-manager .user-row {
+  min-width: 0;
+}
+.data-card, .stat, .entry-card, .reader-list-row, .admin-account-row,
+.audit-row, .user-manager .user-row { padding: 18px; }
+.book-card > *, .book-card h3, .book-card p, .book-card span, .book-card small,
+.data-card p, .data-card li, .stat strong, .dashboard-card strong,
+.admin-account-row *, .reader-list-row *, .user-manager .user-row *,
+.metric-row > *, .table .row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.audit-list { display: grid; gap: 12px; min-width: 0; }
+.audit-row {
+  align-items: start;
+  background: var(--library-paper);
+  border: 1px solid var(--library-line);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px 20px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.audit-row > div { display: grid; gap: 7px; min-width: 0; }
+.audit-row strong { color: var(--library-forest); font-size: 1rem; text-transform: capitalize; }
+.audit-row span, .audit-row small, .audit-row time { color: var(--library-muted); overflow-wrap: anywhere; }
+.audit-row time { font-size: .875rem; }
+.daily-activity { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); }
+.daily-activity > div {
+  background: #fffefa;
+  border: 1px solid var(--library-line);
+  border-radius: 12px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+}
+.daily-activity time, .daily-activity small { color: var(--library-muted); }
+.daily-activity strong { color: var(--library-forest); font-size: 1.25rem; }
+.file-key { border: 1px solid var(--library-line); border-radius: 8px; display: block; margin-top: 8px; overflow-wrap: anywhere; padding: 10px 12px; }
+@media (max-width: 600px) {
+  .audit-row { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+}
