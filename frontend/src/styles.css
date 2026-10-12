@@ -2001,6 +2001,44 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 .daily-activity time, .daily-activity small { color: var(--library-muted); }
 .daily-activity strong { color: var(--library-forest); font-size: 1.25rem; }
 .file-key { border: 1px solid var(--library-line); border-radius: 8px; display: block; margin-top: 8px; overflow-wrap: anywhere; padding: 10px 12px; }
+.book-author-picker {
+  border: 0;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+.book-author-picker legend { font-weight: 700; padding: 0; }
+.book-author-picker > p { color: var(--library-muted); line-height: 1.5; margin: -4px 0 2px; }
+.book-author-picker > small { color: var(--library-muted); }
+.book-author-options {
+  background: #fffefa;
+  border: 1px solid var(--library-line);
+  border-radius: 12px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  max-height: 270px;
+  overflow: auto;
+  padding: 12px;
+}
+.book-author-option {
+  align-items: center;
+  background: var(--library-paper);
+  border: 1px solid var(--library-line);
+  border-radius: 9px;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+.book-author-option.selected { background: #edf7f2; border-color: var(--library-teal, #168276); }
+.book-author-option input { flex: 0 0 auto; height: 18px; margin: 0; width: 18px; }
+.book-author-option > span { display: grid; gap: 3px; min-width: 0; }
+.book-author-option strong, .book-author-option small { overflow-wrap: anywhere; }
+.book-author-option small { color: var(--library-muted); font-size: .82rem; }
 @media (max-width: 600px) {
   .audit-row { grid-template-columns: minmax(0, 1fr); padding: 16px; }
 }

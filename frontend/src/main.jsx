@@ -1471,7 +1471,23 @@ function BookManager({ api, showMessage, startNew = false }) {
     <form className="panel form-grid book-editor" onSubmit={saveBook}>
       <div className="section-heading"><p className="eyebrow">Digital collection</p><h2>{editing.id?'Edit book':'Add new book'}</h2><p>Uploading a valid PDF or TXT publishes it for signed-in members. Books without a file stay private drafts.</p></div>
       <label>Book title<input maxLength="240" value={editing.title||''} onChange={e=>setEditing({...editing,title:e.target.value})} required/></label>
-      <label>Author or authors<small>Choose existing author records; create a new author from the Authors section.</small><select multiple size="4" value={(editing.author_ids||[]).map(String)} onChange={e=>{const ids=[...e.target.selectedOptions].map(option=>Number(option.value));const names=options.authors.filter(author=>ids.includes(author.id)).map(author=>author.name);setEditing({...editing,author_ids:ids,author_id:ids[0]||'',author:names.join(', ')});}}>{options.authors.map(author=><option key={author.id} value={author.id}>{author.name}</option>)}</select>{options.authors.length===0&&<input aria-label="Author name" placeholder="Author name" value={editing.author||''} onChange={e=>setEditing({...editing,author:e.target.value})} required/>}</label>
+      <fieldset className="book-author-picker">
+        <legend>Authors</legend>
+        <p>Choose every author credited for this book. You can select multiple authors without holding Ctrl.</p>
+        {options.authors.length > 0 ? <div className="book-author-options">{options.authors.map(author=>{
+          const selectedIds=(editing.author_ids||[]).map(Number);
+          const checked=selectedIds.includes(author.id);
+          return <label className={`book-author-option${checked?' selected':''}`} key={author.id}>
+            <input type="checkbox" checked={checked} onChange={event=>{
+              const ids=event.target.checked?[...new Set([...selectedIds,author.id])]:selectedIds.filter(id=>id!==author.id);
+              const names=options.authors.filter(item=>ids.includes(item.id)).map(item=>item.name);
+              setEditing({...editing,author_ids:ids,author_id:ids[0]||'',author:names.join(', ')});
+            }}/>
+            <span><strong>{author.name}</strong><small>{author.book_count||0} {(author.book_count||0)===1?'book':'books'}</small></span>
+          </label>;
+        })}</div>:<label>Author name<input aria-label="Author name" placeholder="Author name" value={editing.author||''} onChange={e=>setEditing({...editing,author:e.target.value})} required/></label>}
+        {options.authors.length===0&&<small>Create author records in the Authors section to select them here.</small>}
+      </fieldset>
       <div className="form-grid two-field-grid"><label>Category / genre<select value={editing.category_id||''} onChange={e=>{const item=options.categories.find(category=>String(category.id)===e.target.value);setEditing({...editing,category_id:e.target.value,category:item?.name||''});}}><option value="">Choose category</option>{options.categories.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Publication year<input type="number" min="1000" max={new Date().getFullYear()+1} value={editing.publication_year||''} onChange={e=>setEditing({...editing,publication_year:e.target.value})}/></label><label>ISBN (optional)<input value={editing.isbn||''} onChange={e=>setEditing({...editing,isbn:e.target.value})}/></label><label>Publisher<input value={editing.publisher||''} onChange={e=>setEditing({...editing,publisher:e.target.value})}/></label><label>Language<input value={editing.language||''} onChange={e=>setEditing({...editing,language:e.target.value})}/></label><label>Tags / keywords<input value={Array.isArray(editing.tags)?editing.tags.join(', '):editing.tags||''} onChange={e=>setEditing({...editing,tags:e.target.value})} placeholder="history, local, education"/></label></div>
       <label>Description / summary<textarea rows="5" maxLength="6000" value={editing.description||''} onChange={e=>setEditing({...editing,description:e.target.value})}/></label>
       <div className="form-grid two-field-grid"><label>Publication status<select value={editing.status||'draft'} onChange={e=>setEditing({...editing,status:e.target.value})}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label><label className="check-label"><input type="checkbox" checked={Boolean(editing.is_featured)} onChange={e=>setEditing({...editing,is_featured:e.target.checked})}/> Featured in catalogue</label></div>
