@@ -752,7 +752,7 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
 
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Manage Books'], ['categories', 'Categories & Genres'], ['authors', 'Authors'], ['users', 'Readers'], ['reports', 'Analytics & Reports'], ['audit', 'Audit Logs'], ['storage', 'Storage Health'], ['settings', 'System Settings'], ['security', 'Admin Security']]
+    ? [['dashboard', 'Dashboard'], ['books', 'Manage Books'], ['categories', 'Categories & Genres'], ['authors', 'Authors'], ['users', 'Readers'], ['reports', 'Analytics & Reports'], ['audit', 'Audit Logs'], ['storage', 'Storage Health'], ['settings', 'System Settings'], ['security', 'Admin Security'], ['account', 'My Profile']]
     : [['dashboard', 'Home'], ['books', 'Explore Library'], ['categories', 'Categories'], ['authors', 'Authors'], ['favourites', 'My Favourites'], ['history', 'Recently Read'], ['recommendations', 'Recommendations'], ['account', 'Account Settings']];
 
   return (
