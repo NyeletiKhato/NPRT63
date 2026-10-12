@@ -2045,7 +2045,30 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 }
 .user-manager .table .user-row > div:first-child { gap: 8px; }
 .user-manager .table .user-row .button-row { gap: 10px; }
+.analytics-controls {
+  align-items: end;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+}
+.analytics-period { display: grid; gap: 6px; min-width: 190px; }
+.analytics-controls .button-link {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 16px;
+  white-space: nowrap;
+}
 @media (max-width: 600px) {
   .audit-row { grid-template-columns: minmax(0, 1fr); padding: 16px; }
   .user-manager .table .user-row { padding: 18px; }
+  .analytics-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; }
+  .analytics-period { min-width: 0; }
+}
+@media (max-width: 420px) {
+  .analytics-controls { grid-template-columns: minmax(0, 1fr); }
+  .analytics-controls .button-link { width: 100%; }
 }
