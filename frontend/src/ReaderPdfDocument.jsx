@@ -5,8 +5,9 @@ import 'pdfjs-dist/web/pdf_viewer.css';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-function PdfPage({ pdf, number, zoom, fitMode, width, onError }) {
+function PdfPage({ pdf, number, zoom, fitMode, width, highlights, onError }) {
   const shell = useRef(null);
+  const container = useRef(null);
   const canvas = useRef(null);
   const textLayer = useRef(null);
   const [visible, setVisible] = useState(false);
@@ -64,10 +65,64 @@ function PdfPage({ pdf, number, zoom, fitMode, width, onError }) {
     return () => { active = false; renderTask?.cancel(); layerTask?.cancel(); };
   }, [page, visible, width, zoom, fitMode, onError]);
 
-  return <div ref={shell} className="pdf-page-shell" data-page-number={number} style={{ width: size.width || 'min(100%, 850px)', minHeight: size.height }}><div className="pdf-page-container" style={{ width: size.width || '100%', height: size.height }}>{visible && page ? <><canvas ref={canvas} aria-label={`PDF page ${number}`}/><div ref={textLayer} className="textLayer"/></> : <span className="pdf-page-placeholder">Page {number}</span>}</div></div>;
+  return <div ref={shell} className="pdf-page-shell" data-page-number={number} style={{ width: size.width || 'min(100%, 850px)', minHeight: size.height }}><div ref={container} className="pdf-page-container" style={{ width: size.width || '100%', height: size.height }}>{visible && page ? <><canvas ref={canvas} aria-label={`PDF page ${number}`}/><div ref={textLayer} className="textLayer"/><PdfHighlightOverlay containerRef={container} textLayerRef={textLayer} highlights={highlights} active={visible}/></> : <span className="pdf-page-placeholder">Page {number}</span>}</div></div>;
 }
 
-export default function ReaderPdfDocument({ bytes, page, zoom, fitMode, onPageChange, onError }) {
+function textRangeAtOffsets(root, start, end) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  let total = 0;
+  let startNode = null;
+  let startOffset = 0;
+  let endNode = null;
+  let endOffset = 0;
+  while ((node = walker.nextNode())) {
+    const next = total + node.nodeValue.length;
+    if (!startNode && start >= total && start <= next) { startNode = node; startOffset = start - total; }
+    if (end >= total && end <= next) { endNode = node; endOffset = end - total; break; }
+    total = next;
+  }
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
+
+function PdfHighlightOverlay({ containerRef, textLayerRef, highlights, active }) {
+  const [rects, setRects] = useState([]);
+  useEffect(() => {
+    const container = containerRef.current;
+    const layer = textLayerRef.current;
+    if (!active || !container || !layer || !highlights.length) { setRects([]); return undefined; }
+    let frame = 0;
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const bounds = container.getBoundingClientRect();
+        const next = [];
+        highlights.forEach(item => {
+          const range = textRangeAtOffsets(layer, Number(item.start_offset), Number(item.end_offset));
+          if (!range) return;
+          Array.from(range.getClientRects()).forEach((rect, index) => {
+            if (rect.width && rect.height) next.push({ id: item.id, index, color: item.color, left: rect.left - bounds.left, top: rect.top - bounds.top, width: rect.width, height: rect.height });
+          });
+        });
+        setRects(next);
+      });
+    };
+    const mutationObserver = new MutationObserver(measure);
+    mutationObserver.observe(layer, { childList: true, subtree: true, characterData: true });
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(container);
+    measure();
+    return () => { mutationObserver.disconnect(); resizeObserver.disconnect(); cancelAnimationFrame(frame); };
+  }, [containerRef, textLayerRef, highlights, active]);
+  if (!rects.length) return null;
+  return <div className="pdf-highlight-overlay" aria-hidden="true">{rects.map(rect => <span key={`${rect.id}-${rect.index}`} className={`pdf-highlight-overlay-mark reader-highlight-${rect.color}`} style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}/>)}</div>;
+}
+
+export default function ReaderPdfDocument({ bytes, page, zoom, fitMode, highlights = [], onPageChange, onVisiblePageChange, onError }) {
   const [pdf, setPdf] = useState(null);
   const [width, setWidth] = useState(850);
   const [renderError, setRenderError] = useState('');
@@ -94,6 +149,26 @@ export default function ReaderPdfDocument({ bytes, page, zoom, fitMode, onPageCh
     if (!pdf || !page) return;
     content.current?.querySelector(`[data-page-number="${page}"]`)?.scrollIntoView({ block: 'start' });
   }, [pdf]);
+  useEffect(() => {
+    if (!pdf || !onVisiblePageChange) return undefined;
+    const root = content.current?.closest('.book-reader');
+    if (!root) return undefined;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const marker = root.getBoundingClientRect().top + Math.min(root.clientHeight * .35, 220);
+        let current = 1;
+        root.querySelectorAll('[data-page-number]').forEach(node => {
+          if (node.getBoundingClientRect().top <= marker) current = Number(node.dataset.pageNumber) || current;
+        });
+        onVisiblePageChange(current);
+      });
+    };
+    root.addEventListener('scroll', update, { passive: true });
+    update();
+    return () => { root.removeEventListener('scroll', update); cancelAnimationFrame(frame); };
+  }, [pdf, onVisiblePageChange]);
   async function search(event) {
     event.preventDefault();
     const term = searchTerm.trim().toLocaleLowerCase();
@@ -115,6 +190,6 @@ export default function ReaderPdfDocument({ bytes, page, zoom, fitMode, onPageCh
     <form className="pdf-search" onSubmit={search}><label>Find in this book<input value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="Search text in the PDF"/></label><button className="secondary" disabled={searching || !searchTerm.trim()}>{searching ? 'Searching…' : 'Search'}</button>{searching && <span>Searching pages…</span>}{matches.length > 0 && <span>{matches.length} page{matches.length === 1 ? '' : 's'} found</span>}{matches.length === 0 && searchTerm && !searching && <span>Search to find matches</span>}</form>
     {matches.length > 0 && <div className="pdf-search-matches">{matches.slice(0, 30).map(number => <button type="button" key={number} className="link-button" onClick={() => onPageChange(number)}>Page {number}</button>)}</div>}
     {renderError && <p className="reader-render-error" role="alert">{renderError}</p>}
-    <div className="pdf-document-scroll">{pdf ? Array.from({ length: pdf.numPages }, (_, index) => <PdfPage key={`${bytes.length}-${index + 1}`} pdf={pdf} number={index + 1} zoom={zoom} fitMode={fitMode} width={width} onError={onError}/>) : <p className="loading-state">Preparing PDF viewer…</p>}</div>
+    <div className="pdf-document-scroll">{pdf ? Array.from({ length: pdf.numPages }, (_, index) => <PdfPage key={`${bytes.length}-${index + 1}`} pdf={pdf} number={index + 1} zoom={zoom} fitMode={fitMode} width={width} highlights={highlights.filter(item => Number(item.page) === index + 1)} onError={onError}/>) : <p className="loading-state">Preparing PDF viewer…</p>}</div>
   </div>;
 }

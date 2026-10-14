@@ -1563,12 +1563,14 @@ input:focus, select:focus { border-color: #649184; box-shadow: 0 0 0 3px rgba(31
 .category-reader-card strong { font-size: 1.15rem; }
 .category-reader-card span, .category-reader-card small { color: var(--library-muted); }
 .reader-shelf { display: grid; gap: 12px; margin-top: 24px; }
-.popular-books-empty-card { margin-top: 24px; }
-.popular-books-empty { margin-top: 14px; }
-.reader-shelf .book-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 205px), 1fr)); }
-.reader-shelf .book-card { grid-template-columns: 92px minmax(0, 1fr); grid-template-rows: auto auto; }
+.reader-shelf .book-grid { grid-auto-rows: 1fr; grid-template-columns: repeat(auto-fill, minmax(min(100%, 205px), 1fr)); }
+.reader-shelf .book-card { align-content: stretch; grid-template-columns: 92px minmax(0, 1fr); grid-template-rows: minmax(135px, 1fr) auto; height: 100%; }
+.reader-shelf .book-card > div:nth-child(2) { align-self: start; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.reader-shelf .book-card h3 { display: -webkit-box; min-height: 4.2em; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.reader-shelf .book-card p { display: -webkit-box; min-height: 2.6em; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .reader-shelf .book-cover { height: 135px; max-height: 135px; width: 92px; }
 .reader-shelf .book-actions, .reader-shelf .book-card > .primary { grid-column: 1 / -1; }
+.reader-shelf-empty { align-items: center; display: flex; margin: 0; min-height: 104px; }
 .reader-list { display: grid; gap: 10px; }
 .reader-list-row { align-items: center; background: #fffefa; border: 1px solid var(--library-line); border-radius: 14px; display: flex; flex-wrap: wrap; gap: 14px; padding: 13px; }
 .reader-list-row img { border-radius: 7px; height: 78px; object-fit: cover; width: 58px; }
@@ -1611,20 +1613,58 @@ input:focus, select:focus { border-color: #649184; box-shadow: 0 0 0 3px rgba(31
 .pdf-document-scroll { align-items: center; background: #e7e9e8; border: 1px solid #cbd5df; border-radius: 9px; display: flex; flex-direction: column; gap: 18px; justify-content: flex-start; overflow: visible; padding: 16px; }
 .pdf-page-shell { align-items: flex-start; display: flex; flex: 0 0 auto; justify-content: center; scroll-margin-top: 20px; }
 .pdf-page-container { background: white; box-shadow: 0 5px 18px rgba(16, 24, 20, .25); flex: 0 0 auto; position: relative; }
+.pdf-highlight-overlay { inset: 0; pointer-events: none; position: absolute; z-index: 4; }
+.pdf-highlight-overlay-mark { border-radius: 2px; position: absolute; }
+.pdf-highlight-overlay-mark.reader-highlight-yellow { background: rgba(255, 224, 72, .48); }
+.pdf-highlight-overlay-mark.reader-highlight-green { background: rgba(91, 199, 111, .38); }
+.pdf-highlight-overlay-mark.reader-highlight-blue { background: rgba(67, 169, 224, .38); }
+.pdf-highlight-overlay-mark.reader-highlight-pink { background: rgba(231, 102, 158, .38); }
 .pdf-page-placeholder { color: #64716a; display: grid; height: 100%; min-height: 400px; place-items: center; }
 .pdf-page-container canvas { display: block; }
 .pdf-page-container .textLayer { cursor: text; }
 .reader-render-error { background: #fff8f3; border: 1px solid #edc7b6; border-radius: 9px; color: #8d3f27; margin: 0; padding: 9px 12px; }
 .text-reader-page { background: #fffefa; border: 1px solid var(--library-line); border-radius: 12px; line-height: 1.8; margin: 0 auto; max-width: 850px; padding: clamp(22px, 5vw, 65px); white-space: pre-wrap; width: 100%; }
 .text-reader-chunk { display: block; scroll-margin-top: 20px; }
+.reader-highlight-tools { align-items: end; background: var(--library-paper); border: 1px solid var(--library-line); border-radius: 12px; box-shadow: 0 5px 14px rgba(20, 32, 25, .12); display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 12px; position: sticky; top: 0; z-index: 8; }
+.reader-highlight-tools label { color: var(--library-forest); display: grid; font-size: .84rem; font-weight: 700; gap: 5px; }
+.reader-highlight-picker { align-items: end; border: 0; display: flex; flex-wrap: wrap; gap: 7px; margin: 0; padding: 0; }
+.reader-highlight-picker legend { color: var(--library-forest); font-size: .84rem; font-weight: 700; margin-bottom: 5px; padding: 0; width: 100%; }
+.reader-highlight-choice { align-items: center; background: var(--library-paper); border: 1px solid var(--library-line); border-radius: 9px; color: var(--library-ink); cursor: pointer; display: inline-flex; gap: 6px; min-height: 38px; padding: 5px 9px; }
+.reader-highlight-choice > span { border: 1px solid rgba(0,0,0,.2); border-radius: 4px; height: 18px; width: 18px; }
+.reader-highlight-choice-yellow > span { background: #fff09a; }
+.reader-highlight-choice-green > span { background: #bdebc4; }
+.reader-highlight-choice-blue > span { background: #b9e2fa; }
+.reader-highlight-choice-pink > span { background: #fac5dd; }
+.reader-highlight-choice.is-selected { border-color: var(--library-forest); box-shadow: 0 0 0 2px rgba(51, 92, 73, .2); font-weight: 800; }
+.reader-highlight-tools small { color: var(--library-muted); flex: 1 1 100%; }
+.reader-highlight { border-radius: 2px; color: inherit; padding: 0 1px; }
+.reader-highlight-yellow { background: #fff09a; }
+.reader-highlight-green { background: #bdebc4; }
+.reader-highlight-blue { background: #b9e2fa; }
+.reader-highlight-pink { background: #fac5dd; }
+.highlight-color-chip { border: 1px solid rgba(0,0,0,.2); border-radius: 4px; flex: 0 0 16px; height: 16px; }
+.highlight-chip-yellow { background: #f0d84c; }
+.highlight-chip-green { background: #65bd73; }
+.highlight-chip-blue { background: #55a9d8; }
+.highlight-chip-pink { background: #dd75a4; }
+.highlight-quote { flex: 1; overflow-wrap: anywhere; text-align: left; }
+.reader-theme-dark .reader-highlight-tools { background: #26352e; border-color: #42564b; }
+.reader-theme-dark .reader-highlight-tools label { color: #f3f6ee; }
+.reader-theme-dark .reader-highlight-picker legend { color: #f3f6ee; }
+.reader-theme-dark .reader-highlight-choice { background: #1d2824; border-color: #52675b; color: #eef4ef; }
+::highlight(reader-highlight-yellow) { background-color: #fff09a; color: inherit; }
+::highlight(reader-highlight-green) { background-color: #bdebc4; color: inherit; }
+::highlight(reader-highlight-blue) { background-color: #b9e2fa; color: inherit; }
+::highlight(reader-highlight-pink) { background-color: #fac5dd; color: inherit; }
 .reader-bookmarks { background: var(--library-paper); border: 1px solid var(--library-line); border-radius: 14px; padding: 14px; }
 .reader-bookmarks h3 { color: var(--library-forest); }
 .bookmark-row { align-items: center; border-top: 1px solid var(--library-line); display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; padding: 9px 0; }
 .reader-error { background: #fff8f3; border: 1px solid #edc7b6; border-radius: 14px; padding: 22px; }
 .reader-error h3 { color: #8d3f27; }
-.reader-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
+.reader-footer { align-items: center; background: var(--library-paper); border: 1px solid var(--library-line); border-radius: 12px; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; padding: 10px 14px; position: sticky; z-index: 5; }
 .reader-theme-dark { background: #1d2824; border-color: #394a42; color: #eef4ef; }
 .reader-theme-dark .reader-header, .reader-theme-dark .reader-toolbar, .reader-theme-dark .reader-bookmarks { background: #26352e; border-color: #42564b; }
+.reader-theme-dark .reader-footer { background: #26352e; border-color: #42564b; }
 .reader-theme-dark .reader-header h2, .reader-theme-dark .reader-bookmarks h3 { color: #f3f6ee; }
 .reader-theme-dark .reader-header p, .reader-theme-dark .reader-footer small { color: #cedbd1; }
 .reader-theme-dark .text-reader-page { background: #26342f; border-color: #45564e; color: #edf3ee; }
@@ -2012,6 +2052,10 @@ input, select, textarea { font-size: 1rem; line-height: 1.5; }
 .book-author-picker legend { font-weight: 700; padding: 0; }
 .book-author-picker > p { color: var(--library-muted); line-height: 1.5; margin: -4px 0 2px; }
 .book-author-picker > small { color: var(--library-muted); }
+.book-category-control { display: grid; gap: 10px; min-width: 0; }
+.book-author-add { align-items: end; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) auto; }
+.book-author-add label { display: grid; gap: 6px; }
+.book-author-add button { min-height: 44px; }
 .book-author-options {
   background: #fffefa;
   border: 1px solid var(--library-line);

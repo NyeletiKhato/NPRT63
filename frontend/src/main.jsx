@@ -188,6 +188,7 @@ function App() {
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const adminSetupFlow = query.get('admin_setup') === '1' || query.get('admin_recovery') === '1';
     if (query.get('error') || query.get('error_description')) {
       setAuthScreen(adminSetupFlow ? 'login-admin' : 'entry');
@@ -197,6 +198,8 @@ function App() {
       setAuthScreen('login-user');
       setMessage('Email confirmed. You can now sign in.');
       window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (fragment.get('password_reset') === '1') {
+      setAuthScreen('password-reset');
     } else if (adminSetupFlow) {
       setAuthScreen('login-admin');
       setMessage(query.get('admin_recovery') === '1' ? 'Recovery link opened. Set a new password to continue.' : 'Invitation opened. Complete account setup to continue.');
@@ -221,6 +224,27 @@ function App() {
 
   const api = useMemo(() => ({
     get: async (path) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, {}, '', data.session?.access_token || ''); },
+    download: async (path, filename) => {
+      const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } };
+      let response;
+      try {
+        response = await fetch(path, { credentials: 'include', headers: data.session?.access_token ? { Authorization: `Bearer ${data.session.access_token}` } : {} });
+      } catch {
+        throw new Error('Cannot connect to the library service. Try again.');
+      }
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || 'Report download failed.');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    },
     post: async (path, body) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'POST', body: JSON.stringify(body || {}) }, csrfToken, data.session?.access_token || ''); },
     put: async (path, body) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'PUT', body: JSON.stringify(body || {}) }, csrfToken, data.session?.access_token || ''); },
     patch: async (path, body) => { const { data } = await supabaseAuth?.auth.getSession() || { data: { session: null } }; return request(path, { method: 'PATCH', body: JSON.stringify(body || {}) }, csrfToken, data.session?.access_token || ''); },
@@ -626,6 +650,7 @@ function AdminAuthPanel({ api, setAuthScreen, setUser, setView, resetHistory, sh
 function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUser, setView, resetHistory, showMessage }) {
   const [form, setForm] = useState({ username: '', email: '', password: '' });
   const [loginFieldsUnlocked, setLoginFieldsUnlocked] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
 
   async function submit(event) {
     event.preventDefault();
@@ -633,9 +658,9 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       let data;
       if (mode === 'register') {
         const registration = await api.post('/api/register/', form);
+        setRegisteredEmail(form.email);
         setForm({ username: '', email: '', password: '' });
-        showMessage(registration.message || 'Account created. Check your inbox for a confirmation link before signing in.');
-        setAuthScreen('login-user');
+        showMessage(registration.message || 'Account created. Check your inbox and spam or junk folder for the confirmation email.');
         return;
       } else {
         data = await api.post('/api/login/', { ...form, role });
@@ -649,6 +674,15 @@ function AuthPanel({ api, mode, role, title, setAuthScreen, setCsrfToken, setUse
       setForm({ username: '', email: '', password: '' });
       setUser(activeSession.user); setView('dashboard'); resetHistory({ type: 'view', value: 'dashboard' }); showMessage(mode === 'register' ? 'Account created and signed in.' : 'Signed in successfully.');
     } catch (error) { showMessage(error.message); }
+  }
+
+  if (mode === 'register' && registeredEmail) {
+    return (
+      <section className="auth-page">
+        <div className="auth-copy"><button type="button" className="link-button" onClick={() => setAuthScreen('entry')}>Back to portal</button><div className="auth-copy-layout"><div className="auth-copy-text"><p className="eyebrow">Email confirmation</p><h2>Check your inbox.</h2><p>We sent a confirmation link to <strong>{registeredEmail}</strong>. Check your inbox and spam or junk folder, then click the link before signing in. It expires in 24 hours.</p></div><img className="auth-art" src={libraryBooks} alt="" /></div></div>
+        <div className="panel auth-form"><h3>Your account is waiting for confirmation</h3><p>If the email doesn’t arrive, use the resend option and enter the same username or email. You don’t need to register again.</p><button type="button" className="primary" onClick={() => setAuthScreen('resend-confirmation')}>Resend confirmation email</button><button type="button" className="secondary" onClick={() => setAuthScreen('login-user')}>Go to sign in</button></div>
+      </section>
+    );
   }
 
   return (
@@ -705,22 +739,34 @@ function ResendConfirmationPanel({ api, setAuthScreen, showMessage }) {
 }
 
 function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
-  const [step, setStep] = useState('request');
-  const [form, setForm] = useState({ username: '', code: '', password: '' });
-  const [demoCode, setDemoCode] = useState('');
+  const [resetLink] = useState(() => {
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const username = fragment.get('username') || '';
+    const token = fragment.get('token') || '';
+    return fragment.get('password_reset') === '1' && username && /^[a-f0-9]{64}$/i.test(token) ? { username, token } : null;
+  });
+  const [invalidLink] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')).get('password_reset') === '1' && !resetLink);
+  const [step, setStep] = useState(resetLink ? 'confirm' : 'request');
+  const [form, setForm] = useState(() => ({ username: resetLink?.username || '', token: resetLink?.token || '', password: '', password_confirm: '' }));
 
-  async function requestCode(event) {
+  useEffect(() => {
+    if (new URLSearchParams(window.location.hash.replace(/^#/, '')).get('password_reset') === '1') {
+      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+    }
+  }, []);
+
+  async function requestResetLink(event) {
     event.preventDefault();
     try {
-      const data = await api.post('/api/password-reset/request/', form);
-      setDemoCode(data.reset_code || '');
-      setStep('confirm');
+      const data = await api.post('/api/password-reset/request/', { username: form.username });
+      setStep('sent');
       showMessage(data.message);
     } catch (error) { showMessage(error.message); }
   }
 
   async function resetPassword(event) {
     event.preventDefault();
+    if (form.password !== form.password_confirm) { showMessage('The passwords do not match.'); return; }
     try {
       const data = await api.post('/api/password-reset/confirm/', form);
       showMessage(data.message);
@@ -736,23 +782,26 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
           <div className="auth-copy-text">
             <p className="eyebrow">Account recovery</p>
             <h2>Let's get you back in.</h2>
-            <p>{step === 'request' ? 'Enter your username or registered email to request a one-time reset code.' : 'Enter the one-time code and choose a new password.'}</p>
+            <p>{step === 'request' ? 'Enter your username or registered email to request a secure password-reset link.' : step === 'sent' ? 'Follow the one-time link in the email to choose a new password.' : 'Choose and confirm a new password to finish resetting your account.'}</p>
           </div>
           <img className="auth-art" src={libraryBooks} alt="" />
         </div>
       </div>
       {step === 'request' ? (
-        <form className="panel auth-form" onSubmit={requestCode}>
-          <h3>Request reset code</h3>
+        <form className="panel auth-form" onSubmit={requestResetLink}>
+          {invalidLink && <p className="form-hint" role="alert">This password-reset link is invalid or incomplete. Request a new link below.</p>}
+          <h3>Request a reset link</h3>
           <label>Username or email<input autoComplete="username" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required /></label>
-          <button className="primary" type="submit">Request code</button>
+          <button className="primary" type="submit">Email me a reset link</button>
         </form>
+      ) : step === 'sent' ? (
+        <section className="panel auth-form"><h3>Check your inbox</h3><p>If the account details match, we sent a secure reset link. Check your inbox and spam or junk folder. The link expires in 15 minutes.</p><button className="secondary" type="button" onClick={() => setStep('request')}>Request another link</button></section>
       ) : (
         <form className="panel auth-form" onSubmit={resetPassword}>
           <h3>Choose a new password</h3>
-          {demoCode && <p className="reset-code">Demo reset code: <strong>{demoCode}</strong></p>}
-          <label>Reset code<input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required /></label>
-          <label>New password<input type="password" minLength="8" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+          <p>Resetting password for <strong>{form.username}</strong></p>
+          <label>New password<input type="password" autoComplete="new-password" minLength="8" maxLength="72" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+          <label>Confirm new password<input type="password" autoComplete="new-password" minLength="8" maxLength="72" value={form.password_confirm} onChange={(event) => setForm({ ...form, password_confirm: event.target.value })} required /></label>
           <button className="primary" type="submit">Reset password</button>
         </form>
       )}
@@ -762,8 +811,8 @@ function PasswordResetPanel({ api, setAuthScreen, showMessage }) {
 
 function Nav({ role, view, setView }) {
   const items = role === 'admin'
-    ? [['dashboard', 'Dashboard'], ['books', 'Manage Books'], ['categories', 'Categories & Genres'], ['authors', 'Authors'], ['users', 'Readers'], ['reports', 'Analytics & Reports'], ['audit', 'Audit Logs'], ['storage', 'Storage Health'], ['settings', 'System Settings'], ['security', 'Admin Security'], ['account', 'My Profile']]
-    : [['dashboard', 'Home'], ['books', 'Explore Library'], ['categories', 'Categories'], ['authors', 'Authors'], ['favourites', 'My Favourites'], ['history', 'Recently Read'], ['recommendations', 'Recommendations'], ['account', 'Account Settings']];
+    ? [['dashboard', 'Dashboard'], ['books', 'Manage Books'], ['categories', 'Categories & Genres'], ['authors', 'Authors'], ['users', 'Readers'], ['reports', 'Analytics & Reports'], ['audit', 'Audit Logs'], ['settings', 'System Settings'], ['security', 'Admin Security']]
+    : [['dashboard', 'Home'], ['books', 'Explore Library'], ['categories', 'Categories'], ['authors', 'Authors'], ['favourites', 'My Favourites'], ['history', 'Recently Read'], ['account', 'Account Settings']];
 
   return (
     <nav className="tabs">
@@ -910,7 +959,6 @@ function AdminWorkspace({ api, user, onUserChange, view, setView, showMessage })
   }
   if (view === 'security') return <AdminSecurity api={api} user={user} setView={setView} showMessage={showMessage} />;
   if (view === 'audit') return <AuditLogViewer api={api} showMessage={showMessage} />;
-  if (view === 'storage') return <StorageHealth api={api} showMessage={showMessage} />;
   if (view === 'settings') return <SystemSettings api={api} showMessage={showMessage} />;
   if (view === 'reports') {
     return <AdminAnalytics api={api} summary={summary} showMessage={showMessage} />;
@@ -938,13 +986,13 @@ function AdminAnalytics({api,summary,showMessage}){
   const load=useCallback(()=>{setBusy(true);return api.get(`/api/admin/analytics/?days=${days}`).then(setData).catch((error)=>showMessage(error.message)).finally(()=>setBusy(false));},[api,days,showMessage]);
   useEffect(()=>{load();},[load]);
   const metrics=data;
-  return <section className="panel admin-section"><div className="section-heading section-heading-row"><div><p className="eyebrow">Reader activity</p><h2>Analytics and reports</h2><p>Real catalogue, account, and recorded book-open data. An open is not counted as a completed read.</p></div><div className="analytics-controls"><label className="analytics-period">Period<select value={days} onChange={(e)=>setDays(Number(e.target.value))}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label><a className="button-link secondary" href={`/api/admin/reports/analytics.csv?days=${days}`}>Download CSV</a></div></div>
+  return <><section className="panel admin-section"><div className="section-heading section-heading-row"><div><p className="eyebrow">Reader activity</p><h2>Analytics and reports</h2><p>Real catalogue, account, and recorded book-open data. An open is not counted as a completed read.</p></div><div className="analytics-controls"><label className="analytics-period">Period<select value={days} onChange={(e)=>setDays(Number(e.target.value))}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label><button type="button" className="secondary" onClick={()=>api.download(`/api/admin/reports/analytics.csv?days=${days}`,`library-analytics-${days}-days.csv`).catch((error)=>showMessage(error.message))}>Download CSV</button></div></div>
     {busy&&!metrics?<p className="loading-state">Loading analytics…</p>:metrics&&<><div className="analytics-stat-grid"><Stat label="Total book opens" value={metrics.activity.opens}/><Stat label="Unique readers" value={metrics.activity.unique_readers}/><Stat label="Reader registrations" value={metrics.readers.registrations}/><Stat label="Published books" value={metrics.books.published}/><Stat label="Active readers" value={metrics.readers.active_readers}/><Stat label="Tracked book storage" value={formatBytes(metrics.books.file_bytes)}/></div>
       <div className="admin-two-column"><div className="data-card"><h3>Most opened books</h3>{metrics.most_read.length?metrics.most_read.map((book)=><div className="metric-row" key={book.id}><span>{book.title}</span><strong>{book.opens}</strong></div>):<p className="empty-state">No book opens have been recorded in this period.</p>}</div><div className="data-card"><h3>Popular categories</h3>{metrics.popular_categories.length?metrics.popular_categories.map((item)=><div className="metric-row" key={item.category}><span>{item.category}</span><strong>{item.opens}</strong></div>):<p className="empty-state">No category activity in this period.</p>}</div></div>
       <div className="data-card"><h3>Book opens by day</h3>{metrics.daily.length?<div className="daily-activity">{metrics.daily.map((item)=><div key={item.day}><time>{new Date(`${item.day}T00:00:00`).toLocaleDateString(undefined,{month:'short',day:'numeric'})}</time><strong>{item.opens}</strong><small>{item.readers} readers</small></div>)}</div>:<p className="empty-state">No activity has been recorded in this period.</p>}</div>
       <div className="data-card"><h3>Recent catalogue additions</h3>{summary.books.filter((book)=>book.created_at).slice(0,8).length?summary.books.filter((book)=>book.created_at).slice(0,8).map((book)=><div className="metric-row" key={book.id}><span>{book.title} · {book.author}</span><small>{new Date(book.created_at).toLocaleDateString()}</small></div>):<p className="empty-state">No recent book records.</p>}</div>
       <div className="data-card"><h3>Content needing attention</h3><div className="metric-row"><span>Books without digital files</span><strong>{summary.books.filter((book)=>!book.has_virtual_version).length}</strong></div><div className="metric-row"><span>Missing covers</span><strong>{metrics.books.missing_cover}</strong></div><div className="metric-row"><span>Incomplete description or language</span><strong>{metrics.books.incomplete_metadata}</strong></div></div>
-    </>}{!busy&&metrics&&<button className="secondary" type="button" onClick={load}>Refresh report</button>}</section>;
+    </>}{!busy&&metrics&&<button className="secondary" type="button" onClick={load}>Refresh report</button>}</section><StorageHealth api={api} showMessage={showMessage}/></>;
 }
 function formatBytes(value){const size=Number(value)||0;if(size<1024)return `${size} B`;const units=['KB','MB','GB','TB'];let amount=size/1024,index=0;while(amount>=1024&&index<units.length-1){amount/=1024;index++;}return `${amount.toFixed(1)} ${units[index]}`;}
 
@@ -1097,7 +1145,7 @@ function UserDashboard({ api, setView, showMessage }) {
         {loading?<p className="loading-state">Loading your library…</p>:loadError?<div className="empty-state"><p>We couldn’t load your library right now.</p><button type="button" className="secondary" onClick={load}>Try again</button></div>:featuredBooks.length?<BookShelf books={featuredBooks} onOpen={setReaderBook}/>:<p className="empty-state">No featured books yet. Explore the catalogue to discover available reading.</p>}
         {continueBooks.length>0&&<ReaderShelf title="Continue reading" books={continueBooks} onOpen={setReaderBook} />}
         {recentlyBooks.length>0&&<ReaderShelf title="Recently read" books={recentlyBooks} onOpen={setReaderBook} />}
-        {popularBooks.length>0?<ReaderShelf title="Popular this month" books={popularBooks} onOpen={setReaderBook} />:<div className="data-card popular-books-empty-card"><h3>Popular books</h3><p className="empty-state popular-books-empty">Reader activity will appear here as the collection is explored.</p></div>}
+        <ReaderShelf title="Popular books" books={popularBooks} emptyMessage="Reader activity will appear here as the collection is explored." onOpen={setReaderBook} />
         {recentAddedBooks.length>0&&<ReaderShelf title="Recently added" books={recentAddedBooks} onOpen={setReaderBook} />}
       </div>
       {readerBook&&<BookReader api={api} book={readerBook} onClose={()=>{setReaderBook(null);load();}} showMessage={showMessage}/>}
@@ -1106,7 +1154,7 @@ function UserDashboard({ api, setView, showMessage }) {
 }
 
 function BookShelf({books,onOpen}) { return <div className="book-grid featured-book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>onOpen(book)} aria-label={`Open ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><h3>{book.title}</h3><p>{book.author}</p><span>{book.category||'Digital book'} · Read online</span></div><button type="button" className="primary" onClick={()=>onOpen(book)}>Read Book</button></article>)}</div>; }
-function ReaderShelf({title,books,onOpen}) { return <section className="reader-shelf"><div className="section-heading section-heading-row"><h3>{title}</h3></div><div className="book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>onOpen(book)} aria-label={`Open ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><h3>{book.title}</h3><p>{book.author}</p><span>{book.category||'Digital book'} · Read online</span>{book.resumePage&&<small>Last page: {book.resumePage}</small>}{book.lastOpened&&<small>Opened {new Date(book.lastOpened).toLocaleDateString()}</small>}</div><button type="button" className="primary" onClick={()=>onOpen(book)}>Read Book</button></article>)}</div></section>; }
+function ReaderShelf({title,books,onOpen,emptyMessage}) { return <section className="reader-shelf"><div className="section-heading section-heading-row"><h3>{title}</h3></div>{books.length?<div className="book-grid">{books.map(book=><article className="book-card" key={book.id}><button type="button" className="book-cover-button" onClick={()=>onOpen(book)} aria-label={`Open ${book.title} details`}><img className="book-cover" src={getBookImage(book)} alt={`${book.title} cover`} loading="lazy"/></button><div><h3>{book.title}</h3><p>{book.author}</p><span>{book.category||'Digital book'} · Read online</span>{book.resumePage&&<small>Last page: {book.resumePage}</small>}{book.lastOpened&&<small>Opened {new Date(book.lastOpened).toLocaleDateString()}</small>}</div><button type="button" className="primary" onClick={()=>onOpen(book)}>Read Book</button></article>)}</div>:<p className="empty-state reader-shelf-empty">{emptyMessage||'No books to show yet.'}</p>}</section>; }
 
 function AdminDashboard({ summary, setView }) {
   return (
@@ -1503,31 +1551,45 @@ function BookDetails({api,book,books,onRead,onClose,showMessage}){
   return <div className="reader-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="panel book-details-modal" role="dialog" aria-modal="true" aria-labelledby="book-details-title"><button className="secondary modal-close" onClick={onClose}>Close</button><div className="book-details-layout"><img className="book-details-cover" src={getBookImage(book)} alt={`${book.title} cover`}/><div><p className="eyebrow">Book details</p><h2 id="book-details-title">{book.title}</h2><p className="book-detail-author">{book.author}</p>{book.description&&<p className="book-description">{book.description}</p>}<dl className="book-metadata">{metadata.filter(([,value])=>value!==null&&value!==undefined&&String(value).trim()!=='').map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{book.tags?.length>0&&<div className="tag-list">{book.tags.map(tag=><span key={tag}>{tag}</span>)}</div>}<div className="book-actions"><button className="primary" onClick={()=>onRead(book)}>Read Book</button><button className="secondary" disabled={busy||!state} onClick={toggleFavourite}>{state?.favourite?'♥ Saved':'♡ Add to favourites'}</button></div>{state?.progress&&<small>Continue from page {state.progress.page}.</small>}</div></div>{related.length>0&&<div className="related-books"><h3>Related books in {book.category}</h3>{related.map(item=><button key={item.id} onClick={()=>onRead(item)}>{item.title}<span>{item.author}</span></button>)}</div>}</section></div>;
 }
 
+function selectedReaderText(root){const selection=window.getSelection();if(!selection||selection.isCollapsed||!selection.rangeCount)return null;const range=selection.getRangeAt(0);const startElement=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;const endElement=range.endContainer.nodeType===Node.ELEMENT_NODE?range.endContainer:range.endContainer.parentElement;const startPage=startElement?.closest('[data-page-number]');const endPage=endElement?.closest('[data-page-number]');if(!startPage||startPage!==endPage||!root.contains(startPage))return null;const container=startPage.querySelector('.textLayer')||startPage;const offset=(node,position)=>{const before=document.createRange();before.selectNodeContents(container);before.setEnd(node,position);return before.toString().length;};const start=offset(range.startContainer,range.startOffset);const end=offset(range.endContainer,range.endOffset);const quote=range.toString();if(end<=start||!quote.trim()||quote.length>2000)return null;return{page:Number(startPage.dataset.pageNumber),start_offset:start,end_offset:end,quote};}
+function renderTextHighlightPage(text,page,highlights){const marks=highlights.filter(item=>Number(item.page)===page).sort((a,b)=>a.start_offset-b.start_offset);const parts=[];let cursor=0;for(const item of marks){const start=Math.max(cursor,Math.min(text.length,Number(item.start_offset)));const end=Math.max(start,Math.min(text.length,Number(item.end_offset)));if(start>cursor)parts.push(text.slice(cursor,start));if(end>start)parts.push(<mark key={`highlight-${item.id}`} className={`reader-highlight reader-highlight-${item.color}`}>{text.slice(start,end)}</mark>);cursor=end;}if(cursor<text.length)parts.push(text.slice(cursor));return parts;}
+
 function BookReader({api,book,onClose,showMessage}){
-  const [text,setText]=useState(''),[pdfData,setPdfData]=useState(null),[page,setPage]=useState(1),[zoom,setZoom]=useState(1),[fitMode,setFitMode]=useState('width'),[state,setState]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[theme,setTheme]=useState(()=>localStorage.getItem('reader-theme')||'light');const readerRef=React.useRef(null);const isPdf=book.virtual_file_type==='application/pdf',isText=book.virtual_file_type==='text/plain';const pages=isText?(text.match(/[\s\S]{1,3200}/g)||['']):[];
+  const [text,setText]=useState(''),[pdfData,setPdfData]=useState(null),[page,setPage]=useState(1),[zoom,setZoom]=useState(1),[fitMode,setFitMode]=useState('width'),[state,setState]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[theme,setTheme]=useState(()=>localStorage.getItem('reader-theme')||'light'),[highlightColor,setHighlightColor]=useState('yellow'),[selectedText,setSelectedText]=useState(null),[savingHighlight,setSavingHighlight]=useState(false);const readerRef=React.useRef(null);const isPdf=book.virtual_file_type==='application/pdf',isText=book.virtual_file_type==='text/plain';const pages=isText?(text.match(/[\s\S]{1,3200}/g)||['']):[];
+  useEffect(()=>{let frame=0;const update=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{const next=selectedReaderText(readerRef.current);if(next)setSelectedText(next);});};document.addEventListener('selectionchange',update);return()=>{document.removeEventListener('selectionchange',update);cancelAnimationFrame(frame);};},[]);
   const scrollToPage=useCallback((target)=>{const next=Math.max(1,Number(target)||1);setPage(next);requestAnimationFrame(()=>readerRef.current?.querySelector(`[data-page-number="${next}"]`)?.scrollIntoView({behavior:'smooth',block:'start'}));},[]);
-  useEffect(()=>{let active=true;setBusy(true);setError('');setPdfData(null);const content=isText?api.get(`/api/books/${book.id}/read/`):isPdf?fetch(`/api/books/${book.id}/content/`,{credentials:'include'}).then(async response=>{if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||'The stored PDF could not be opened.');}const blob=await response.blob();const signature=new Uint8Array(await blob.slice(0,5).arrayBuffer());if(String.fromCharCode(...signature)!=='%PDF-')throw new Error('The stored file is not a readable PDF.');const tail=await blob.slice(Math.max(0,blob.size-4096)).text();if(!tail.includes('%%EOF'))throw new Error('This PDF appears incomplete. Ask library staff to replace the file.');return {pdfData:new Uint8Array(await blob.arrayBuffer())};}):Promise.resolve(null);Promise.all([api.get(`/api/reader/books/${book.id}/state/`),content]).then(([readerState,file])=>{if(!active)return;setState(readerState);const savedPage=readerState.progress?.page||1;setPage(savedPage);if(isText&&file)setText(file.text);if(isPdf&&file?.pdfData)setPdfData(file.pdfData);return (isPdf||isText)?api.post(`/api/books/${book.id}/open/`):null;}).catch(err=>{if(active)setError(err.message);}).finally(()=>{if(active)setBusy(false);});return()=>{active=false;};},[api,book.id,isPdf,isText,refresh]);
-  useEffect(()=>{const root=readerRef.current;if(!root||busy||error)return;let frame=0;const update=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{const marker=root.getBoundingClientRect().top+Math.min(root.clientHeight*.35,220);let current=1;root.querySelectorAll('[data-page-number]').forEach(node=>{if(node.getBoundingClientRect().top<=marker)current=Number(node.dataset.pageNumber)||current;});setPage(value=>value===current?value:current);});};root.addEventListener('scroll',update,{passive:true});update();return()=>{root.removeEventListener('scroll',update);cancelAnimationFrame(frame);};},[busy,error,pdfData,text]);
+  useEffect(()=>{let active=true;setBusy(true);setError('');setPdfData(null);const content=isText?api.get(`/api/books/${book.id}/read/`):isPdf?fetch(`/api/books/${book.id}/content/`,{credentials:'include'}).then(async response=>{if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||'The stored PDF could not be opened.');}const blob=await response.blob();const signature=new Uint8Array(await blob.slice(0,5).arrayBuffer());if(String.fromCharCode(...signature)!=='%PDF-')throw new Error('The stored file is not a readable PDF.');const tail=await blob.slice(Math.max(0,blob.size-4096)).text();if(!tail.includes('%%EOF'))throw new Error('This PDF appears incomplete. Ask library staff to replace the file.');return {pdfData:new Uint8Array(await blob.arrayBuffer())};}):Promise.resolve(null);Promise.all([api.get(`/api/reader/books/${book.id}/state/`),content,api.get(`/api/reader/books/${book.id}/highlights/`)]).then(([readerState,file,highlightData])=>{if(!active)return;setState({...readerState,highlights:highlightData.highlights||[]});const savedPage=readerState.progress?.page||1;setPage(savedPage);if(isText&&file)setText(file.text);if(isPdf&&file?.pdfData)setPdfData(file.pdfData);return (isPdf||isText)?api.post(`/api/books/${book.id}/open/`):null;}).catch(err=>{if(active)setError(err.message);}).finally(()=>{if(active)setBusy(false);});return()=>{active=false;};},[api,book.id,isPdf,isText,refresh]);
+  useEffect(()=>{const root=readerRef.current;if(!root||busy||error||isPdf)return;let frame=0;const update=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{const marker=root.getBoundingClientRect().top+Math.min(root.clientHeight*.35,220);let current=1;root.querySelectorAll('[data-page-number]').forEach(node=>{if(node.getBoundingClientRect().top<=marker)current=Number(node.dataset.pageNumber)||current;});setPage(value=>value===current?value:current);});};root.addEventListener('scroll',update,{passive:true});return()=>{root.removeEventListener('scroll',update);cancelAnimationFrame(frame);};},[busy,error,pdfData,text,isPdf]);
   useEffect(()=>{if(busy||error||!isText)return;const frame=requestAnimationFrame(()=>readerRef.current?.querySelector(`[data-page-number="${page}"]`)?.scrollIntoView({block:'start'}));return()=>cancelAnimationFrame(frame);},[busy,error,isText,text]);
   useEffect(()=>{if(busy||error||!state)return;const timer=window.setTimeout(()=>api.put(`/api/reader/books/${book.id}/progress/`,{location:{page}}).catch(err=>showMessage(err.message)),650);return()=>window.clearTimeout(timer);},[api,book.id,page,busy,error,state,showMessage]);
   useEffect(()=>{localStorage.setItem('reader-theme',theme);},[theme]);
+  async function closeReader(){let finalPage=page;const root=readerRef.current;if(root){const marker=root.getBoundingClientRect().top+Math.min(root.clientHeight*.35,220);root.querySelectorAll('[data-page-number]').forEach(node=>{if(node.getBoundingClientRect().top<=marker)finalPage=Number(node.dataset.pageNumber)||finalPage;});}try{if(state)await api.put(`/api/reader/books/${book.id}/progress/`,{location:{page:finalPage}});}catch(err){showMessage(err.message);}onClose();}
+  function captureReaderSelection(){const next=selectedReaderText(readerRef.current);if(next)setSelectedText(next);}
+  async function saveHighlight(){if(!selectedText||savingHighlight)return;setSavingHighlight(true);try{const result=await api.post(`/api/reader/books/${book.id}/highlights/`,{...selectedText,color:highlightColor});setState(current=>({...current,highlights:[...(current?.highlights||[]),result.highlight].sort((a,b)=>a.page-b.page||a.start_offset-b.start_offset)}));setSelectedText(null);window.getSelection()?.removeAllRanges();showMessage('Text highlighted and saved.');}catch(err){showMessage(err.message);}finally{setSavingHighlight(false);}}
+  async function removeHighlight(id){try{await api.delete(`/api/reader/highlights/${id}/`);setState(current=>({...current,highlights:(current?.highlights||[]).filter(item=>item.id!==id)}));}catch(err){showMessage(err.message);}}
   async function toggleFavourite(){try{if(state.favourite){await api.delete(`/api/reader/books/${book.id}/favourite/`);setState({...state,favourite:false});showMessage('Removed from favourites.');}else{await api.post(`/api/reader/books/${book.id}/favourite/`);setState({...state,favourite:true});showMessage('Added to favourites.');}}catch(err){showMessage(err.message);}}
   async function addBookmark(){const name=window.prompt('Name this bookmark (optional):','');if(name===null)return;try{const result=await api.post(`/api/reader/books/${book.id}/bookmarks/`,{name,location:{page}});setState({...state,bookmarks:[result.bookmark,...(state.bookmarks||[])]});showMessage('Bookmark saved.');}catch(err){showMessage(err.message);}}
   async function removeBookmark(id){try{await api.delete(`/api/reader/bookmarks/${id}/`);setState({...state,bookmarks:state.bookmarks.filter(item=>item.id!==id)});showMessage('Bookmark removed.');}catch(err){showMessage(err.message);}}
   async function renameBookmark(mark){const name=window.prompt('Bookmark name:',mark.name||'');if(name===null)return;try{const result=await api.put(`/api/reader/bookmarks/${mark.id}/`,{name});setState({...state,bookmarks:state.bookmarks.map(item=>item.id===mark.id?result.bookmark:item)});showMessage('Bookmark updated.');}catch(err){showMessage(err.message);}}
-  return <div className={`reader-modal-backdrop reader-backdrop-${theme}`}><section ref={readerRef} className={`panel book-reader reader-theme-${theme}`} aria-label={`Reading ${book.title}`}><div className="reader-header"><div><p className="eyebrow">Read Online</p><h2>{book.title}</h2><p>{book.author}</p></div><div className="book-actions"><button type="button" className="secondary" onClick={toggleFavourite} disabled={!state}>{state?.favourite?'♥ Favourite':'♡ Favourite'}</button><button type="button" className="secondary" onClick={()=>setTheme(theme==='light'?'dark':'light')}>Use {theme==='light'?'dark':'light'} theme</button><button type="button" className="secondary" onClick={onClose}>Back to book</button></div></div>
+  return <div className={`reader-modal-backdrop reader-backdrop-${theme}`}><section ref={readerRef} onMouseUp={captureReaderSelection} onTouchEnd={captureReaderSelection} className={`panel book-reader reader-theme-${theme}`} aria-label={`Reading ${book.title}`}><div className="reader-header"><div><p className="eyebrow">Read Online</p><h2>{book.title}</h2><p>{book.author}</p></div><div className="book-actions"><button type="button" className="secondary" onClick={toggleFavourite} disabled={!state}>{state?.favourite?'♥ Favourite':'♡ Favourite'}</button><button type="button" className="secondary" onClick={()=>setTheme(theme==='light'?'dark':'light')}>Use {theme==='light'?'dark':'light'} theme</button><button type="button" className="secondary" onClick={closeReader}>Back to book</button></div></div>
     {busy?<p className="loading-state">Opening your book…</p>:error?<div className="reader-error" role="alert"><h3>Unable to open this book</h3><p>{error}</p><button className="primary" onClick={()=>setRefresh(value=>value+1)}>Retry</button><button className="secondary" onClick={onClose}>Back to catalogue</button></div>:!isPdf&&!isText?<div className="reader-error"><h3>Unsupported file format</h3><p>This library currently supports PDF and plain text books. This file is marked as {book.virtual_file_type||'unknown format'}.</p></div>:<>
-      {isPdf?<><div className="reader-toolbar"><button type="button" className="secondary" onClick={()=>{setFitMode(null);setZoom(value=>Math.max(.5,Number((value-.1).toFixed(1))));}} aria-label="Zoom out">−</button><span>{fitMode?`Fit ${fitMode}`:`${Math.round(zoom*100)}%`}</span><button type="button" className="secondary" onClick={()=>{setFitMode(null);setZoom(value=>Math.min(3,Number((value+.1).toFixed(1))));}} aria-label="Zoom in">+</button><button type="button" className="secondary" onClick={()=>setFitMode('width')}>Fit width</button><button type="button" className="secondary" onClick={()=>setFitMode('page')}>Fit page</button><button type="button" className="secondary" onClick={()=>readerRef.current?.requestFullscreen?.()}>Full screen</button></div>{pdfData&&<React.Suspense fallback={<p className="loading-state">Starting the PDF reader…</p>}><ReaderPdfDocument bytes={pdfData} page={page} zoom={zoom} fitMode={fitMode} onPageChange={scrollToPage} onError={setError}/></React.Suspense>}</>:<><div className="reader-toolbar"><button type="button" className="secondary" onClick={()=>setZoom(value=>Math.max(.7,Number((value-.1).toFixed(1))))} aria-label="Zoom out">−</button><span>{Math.round(zoom*100)}%</span><button type="button" className="secondary" onClick={()=>setZoom(value=>Math.min(1.8,Number((value+.1).toFixed(1))))} aria-label="Zoom in">+</button><button type="button" className="secondary" onClick={()=>readerRef.current?.requestFullscreen?.()}>Full screen</button><button type="button" className="secondary" onClick={()=>setRefresh(value=>value+1)}>Reload book</button></div><article className="text-reader-page" style={{fontSize:`${zoom}rem`}}>{pages.map((chunk,index)=><span className="text-reader-chunk" data-page-number={index+1} key={index}>{chunk}</span>)}</article></>}
+      <div className="reader-highlight-tools"><fieldset className="reader-highlight-picker"><legend>Highlight color</legend>{[['yellow','Yellow'],['green','Green'],['blue','Blue'],['pink','Pink']].map(([color,label])=><button key={color} type="button" className={`reader-highlight-choice reader-highlight-choice-${color}${highlightColor===color?' is-selected':''}`} aria-label={`${label} highlight`} aria-pressed={highlightColor===color} onMouseDown={event=>event.preventDefault()} onClick={()=>setHighlightColor(color)}><span aria-hidden="true"/>{label}</button>)}</fieldset><button type="button" className="secondary" onMouseDown={event=>event.preventDefault()} onClick={saveHighlight} disabled={!selectedText||savingHighlight}>{savingHighlight?'Saving…':'Highlight selected text'}</button>{selectedText&&<small>Selected: “{selectedText.quote.slice(0,100)}{selectedText.quote.length>100?'…':''}”</small>}</div>
+      {isPdf?<><div className="reader-toolbar"><button type="button" className="secondary" onClick={()=>{setFitMode(null);setZoom(value=>Math.max(.5,Number((value-.1).toFixed(1))));}} aria-label="Zoom out">−</button><span>{fitMode?`Fit ${fitMode}`:`${Math.round(zoom*100)}%`}</span><button type="button" className="secondary" onClick={()=>{setFitMode(null);setZoom(value=>Math.min(3,Number((value+.1).toFixed(1))));}} aria-label="Zoom in">+</button><button type="button" className="secondary" onClick={()=>setFitMode('width')}>Fit width</button><button type="button" className="secondary" onClick={()=>setFitMode('page')}>Fit page</button><button type="button" className="secondary" onClick={()=>readerRef.current?.requestFullscreen?.()}>Full screen</button></div>{pdfData&&<React.Suspense fallback={<p className="loading-state">Starting the PDF reader…</p>}><ReaderPdfDocument bytes={pdfData} page={page} zoom={zoom} fitMode={fitMode} highlights={state?.highlights||[]} onPageChange={scrollToPage} onVisiblePageChange={setPage} onError={setError}/></React.Suspense>}</>:<><div className="reader-toolbar"><button type="button" className="secondary" onClick={()=>setZoom(value=>Math.max(.7,Number((value-.1).toFixed(1))))} aria-label="Zoom out">−</button><span>{Math.round(zoom*100)}%</span><button type="button" className="secondary" onClick={()=>setZoom(value=>Math.min(1.8,Number((value+.1).toFixed(1))))} aria-label="Zoom in">+</button><button type="button" className="secondary" onClick={()=>readerRef.current?.requestFullscreen?.()}>Full screen</button><button type="button" className="secondary" onClick={()=>setRefresh(value=>value+1)}>Reload book</button></div><article className="text-reader-page" style={{fontSize:`${zoom}rem`}}>{pages.map((chunk,index)=><span className="text-reader-chunk" data-page-number={index+1} key={index}>{renderTextHighlightPage(chunk,index+1,state?.highlights||[])}</span>)}</article></>}
     <div className="reader-bookmarks"><div className="section-heading section-heading-row"><h3>Bookmarks</h3><button className="secondary" onClick={addBookmark}>Save this position</button></div>{state?.bookmarks?.length?state.bookmarks.map(mark=><div className="bookmark-row" key={mark.id}><button className="link-button" onClick={()=>scrollToPage(mark.location.page)}>{mark.name||`Page ${mark.location.page}`}</button><span>Page {mark.location.page}</span><button className="link-button" onClick={()=>renameBookmark(mark)}>Rename</button><button className="link-button" onClick={()=>removeBookmark(mark.id)}>Remove</button></div>):<p className="empty-state">Save a position to find it again later.</p>}</div>
+    <div className="reader-bookmarks reader-highlight-list"><h3>Highlights</h3>{state?.highlights?.length?state.highlights.map(item=><div className="bookmark-row" key={item.id}><span className={`highlight-color-chip highlight-chip-${item.color}`}/><button className="link-button highlight-quote" onClick={()=>scrollToPage(item.page)}>Page {item.page}: {item.quote}</button><button className="link-button" onClick={()=>removeHighlight(item.id)}>Remove</button></div>):<p className="empty-state">Select text, choose a color, then save a highlight.</p>}</div>
     </>}
-    <div className="reader-footer"><small>Reading position saves automatically for your account.</small><button type="button" className="secondary" onClick={onClose}>Close Reader</button></div></section></div>;
+    <div className="reader-footer"><small>Reading position saves automatically for your account.</small><button type="button" className="secondary" onClick={closeReader}>Close Reader</button></div></section></div>;
 }
 
 function BookManager({ api, showMessage, startNew = false }) {
-  const [editing,setEditing]=useState({...emptyBook}),[virtualFile,setVirtualFile]=useState(null),[coverFile,setCoverFile]=useState(null),[booksKey,setBooksKey]=useState(0),[options,setOptions]=useState({categories:[],authors:[]}),[progress,setProgress]=useState(null),[preview,setPreview]=useState(false),[checking,setChecking]=useState(false),[saving,setSaving]=useState(false);
+  const [editing,setEditing]=useState({...emptyBook}),[virtualFile,setVirtualFile]=useState(null),[coverFile,setCoverFile]=useState(null),[booksKey,setBooksKey]=useState(0),[options,setOptions]=useState({categories:[],authors:[]}),[progress,setProgress]=useState(null),[preview,setPreview]=useState(false),[checking,setChecking]=useState(false),[saving,setSaving]=useState(false),[newAuthorName,setNewAuthorName]=useState(''),[addingAuthor,setAddingAuthor]=useState(false),[newCategoryName,setNewCategoryName]=useState(''),[addingCategory,setAddingCategory]=useState(false);
   const virtualFileInput=React.useRef(null),coverFileInput=React.useRef(null);
   useEffect(()=>{Promise.all([api.get('/api/admin/categories/'),api.get('/api/admin/authors/')]).then(([categories,authors])=>setOptions({categories:categories.categories.filter(item=>item.is_active),authors:authors.authors})).catch(error=>showMessage(error.message));},[api,showMessage]);
   useEffect(()=>{if(startNew)setEditing({...emptyBook});},[startNew]);
+
+  async function addAuthor(event){event.preventDefault();const name=newAuthorName.trim();if(!name)return;setAddingAuthor(true);try{const {author}=await api.post('/api/admin/authors/',{name});setOptions(current=>({...current,authors:[...current.authors,author].sort((a,b)=>a.name.localeCompare(b.name))}));const ids=[...new Set([...(editing.author_ids||[]).map(Number),author.id])];setEditing(current=>({...current,author_ids:ids,author_id:ids[0]||'',author:[...options.authors.filter(item=>ids.includes(item.id)).map(item=>item.name),author.name].join(', ')}));setNewAuthorName('');showMessage(`Author “${author.name}” added and selected.`);}catch(error){showMessage(error.message);}finally{setAddingAuthor(false);}}
+
+  async function addCategory(event){event.preventDefault();const name=newCategoryName.trim();if(!name)return;setAddingCategory(true);try{const {category}=await api.post('/api/admin/categories/',{name});setOptions(current=>({...current,categories:[...current.categories,category].sort((a,b)=>a.name.localeCompare(b.name))}));setEditing(current=>({...current,category_id:category.id,category:category.name}));setNewCategoryName('');showMessage(`Category “${category.name}” added and selected.`);}catch(error){showMessage(error.message);}finally{setAddingCategory(false);}}
 
   async function saveBook(event){event.preventDefault();if(saving)return;if(virtualFile&&(!['application/pdf','text/plain'].includes(virtualFile.type)||virtualFile.size>50*1024*1024))return showMessage('Select a PDF or TXT file smaller than 50 MB.');if(coverFile&&(!['image/jpeg','image/png','image/webp'].includes(coverFile.type)||coverFile.size>25*1024*1024))return showMessage('Select a JPEG, PNG, or WEBP cover smaller than 25 MB.');
     setSaving(true);setProgress(virtualFile||coverFile?0:null);try{const tags=Array.isArray(editing.tags)?editing.tags:String(editing.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean);const desiredStatus=virtualFile?'published':editing.status;const payload={...editing,tags,status:virtualFile?'draft':(editing.status==='published'&&!editing.id?'draft':editing.status)};delete payload.id;delete payload.has_virtual_version;delete payload.has_cover;delete payload.cover_url;delete payload.virtual_file_name;delete payload.virtual_file_type;
@@ -1553,6 +1615,7 @@ function BookManager({ api, showMessage, startNew = false }) {
       <fieldset className="book-author-picker">
         <legend>Authors</legend>
         <p>Choose every author credited for this book. You can select multiple authors without holding Ctrl.</p>
+        <div className="book-author-add"><label>Add a missing author<input value={newAuthorName} maxLength="160" onChange={event=>setNewAuthorName(event.target.value)} placeholder="Enter author name"/></label><button type="button" className="secondary" onClick={addAuthor} disabled={addingAuthor||!newAuthorName.trim()}>{addingAuthor?'Adding…':'Add author'}</button></div>
         {options.authors.length > 0 ? <div className="book-author-options">{options.authors.map(author=>{
           const selectedIds=(editing.author_ids||[]).map(Number);
           const checked=selectedIds.includes(author.id);
@@ -1564,10 +1627,9 @@ function BookManager({ api, showMessage, startNew = false }) {
             }}/>
             <span><strong>{author.name}</strong><small>{author.book_count||0} {(author.book_count||0)===1?'book':'books'}</small></span>
           </label>;
-        })}</div>:<label>Author name<input aria-label="Author name" placeholder="Author name" value={editing.author||''} onChange={e=>setEditing({...editing,author:e.target.value})} required/></label>}
-        {options.authors.length===0&&<small>Create author records in the Authors section to select them here.</small>}
+        })}</div>:<small>No authors have been added yet. Add the author above, then select them here.</small>}
       </fieldset>
-      <div className="form-grid two-field-grid"><label>Category / genre<select value={editing.category_id||''} onChange={e=>{const item=options.categories.find(category=>String(category.id)===e.target.value);setEditing({...editing,category_id:e.target.value,category:item?.name||''});}}><option value="">Choose category</option>{options.categories.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Publication year<input type="number" min="1000" max={new Date().getFullYear()+1} value={editing.publication_year||''} onChange={e=>setEditing({...editing,publication_year:e.target.value})}/></label><label>ISBN (optional)<input value={editing.isbn||''} onChange={e=>setEditing({...editing,isbn:e.target.value})}/></label><label>Publisher<input value={editing.publisher||''} onChange={e=>setEditing({...editing,publisher:e.target.value})}/></label><label>Language<input value={editing.language||''} onChange={e=>setEditing({...editing,language:e.target.value})}/></label><label>Tags / keywords<input value={Array.isArray(editing.tags)?editing.tags.join(', '):editing.tags||''} onChange={e=>setEditing({...editing,tags:e.target.value})} placeholder="history, local, education"/></label></div>
+      <div className="form-grid two-field-grid"><div className="book-category-control"><div className="book-author-add"><label>Add a missing category<input value={newCategoryName} maxLength="120" onChange={event=>setNewCategoryName(event.target.value)} placeholder="Enter category or genre"/></label><button type="button" className="secondary" onClick={addCategory} disabled={addingCategory||!newCategoryName.trim()}>{addingCategory?'Adding…':'Add category'}</button></div><label>Category / genre<select value={editing.category_id||''} onChange={e=>{const item=options.categories.find(category=>String(category.id)===e.target.value);setEditing({...editing,category_id:e.target.value,category:item?.name||''});}}><option value="">Choose category</option>{options.categories.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><label>Publication year<input type="number" min="1000" max={new Date().getFullYear()+1} value={editing.publication_year||''} onChange={e=>setEditing({...editing,publication_year:e.target.value})}/></label><label>ISBN (optional)<input value={editing.isbn||''} onChange={e=>setEditing({...editing,isbn:e.target.value})}/></label><label>Publisher<input value={editing.publisher||''} onChange={e=>setEditing({...editing,publisher:e.target.value})}/></label><label>Language<input value={editing.language||''} onChange={e=>setEditing({...editing,language:e.target.value})}/></label><label>Tags / keywords<input value={Array.isArray(editing.tags)?editing.tags.join(', '):editing.tags||''} onChange={e=>setEditing({...editing,tags:e.target.value})} placeholder="history, local, education"/></label></div>
       <label>Description / summary<textarea rows="5" maxLength="6000" value={editing.description||''} onChange={e=>setEditing({...editing,description:e.target.value})}/></label>
       <div className="form-grid two-field-grid"><label>Publication status<select value={editing.status||'draft'} onChange={e=>setEditing({...editing,status:e.target.value})}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label><label className="check-label"><input type="checkbox" checked={Boolean(editing.is_featured)} onChange={e=>setEditing({...editing,is_featured:e.target.checked})}/> Featured in catalogue</label></div>
       <label>Digital book file (PDF or TXT)<input ref={virtualFileInput} type="file" accept=".pdf,.txt,application/pdf,text/plain" onChange={e=>setVirtualFile(e.target.files?.[0]||null)}/><small>Maximum 50 MB. Files are stored privately and streamed to signed-in readers.</small></label>

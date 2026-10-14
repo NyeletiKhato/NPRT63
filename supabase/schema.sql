@@ -15,8 +15,12 @@ create table if not exists public.users (
   admin_mfa_enabled boolean not null default false,
   created_at timestamptz not null default now()
 );
--- Usernames are the unique account identifiers; email addresses may be shared.
+-- Usernames are unique across all accounts. Reader accounts must also use a
+-- unique email address, compared without case or surrounding whitespace.
 drop index if exists public.users_email_unique;
+create unique index if not exists users_reader_email_unique_idx
+  on public.users (lower(btrim(email)))
+  where role = 'user' and btrim(email) <> '';
 alter table public.users alter column email_verified set default false;
 
 create table if not exists public.books (
