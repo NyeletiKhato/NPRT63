@@ -9,6 +9,7 @@
     "admin:reset-preview": "node scripts/reset-admins.js",
     "admin:reset": "node scripts/reset-admins.js --apply",
     "test": "node --test",
+    "test:security-staging": "node --test backend/security-staging.test.js",
     "build": "vite build --configLoader runner",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --configLoader runner"
   },

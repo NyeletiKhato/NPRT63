@@ -5,7 +5,7 @@ const net = require('net');
 const viteCli = path.join(path.dirname(require.resolve('vite')), '..', '..', 'bin', 'vite.js');
 const processes = [];
 
-function waitForApiPort(port, timeoutMs = 15000) {
+function waitForApiPort(port, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
     const attempt = () => {

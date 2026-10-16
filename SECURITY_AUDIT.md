@@ -41,4 +41,5 @@ Baseline before changes: `npm run build` passed; `node --check backend/server.js
 - Supabase dashboard policies, project plan, PITR availability, backups, Render environment variables, and live deployment health were not inspected.
 - Malware scanning is not installed or claimed. PDF signature checks do not prove that a document is benign.
 - Automated tests cover validation helpers; they do not replace API authorization, database RLS/grant, or browser integration tests.
+- An opt-in staging acceptance suite exercises protected routes, reader ownership, administrator authorization and audit events, upload/read/storage access, recovery links, and rate limits. It requires disposable Supabase identities, records, private Storage objects, and controlled mail tokens; it has not been run without that staging configuration.
 - `npm audit` is currently clean, but dependency advisories change over time; repeat the scan in CI and before deployment.

@@ -36,3 +36,15 @@ test('checks cover bytes against the declared image type', () => {
   assert.equal(validateCoverFile({ mime: 'image/webp', bytes: webp }).error, undefined);
   assert.match(validateCoverFile({ mime: 'image/png', bytes: jpeg }).error, /does not match/);
 });
+
+test('rejects empty, oversized, and unsupported cover uploads', () => {
+  assert.match(validateCoverFile({ mime: 'image/png', bytes: Buffer.alloc(0) }).error, /empty/);
+  assert.match(validateCoverFile({ mime: 'image/png', bytes: Buffer.alloc(5 * 1024 * 1024 + 1) }).error, /larger than 5 MB/);
+  assert.match(validateCoverFile({ mime: 'image/svg+xml', bytes: Buffer.from('<svg/>') }).error, /does not match/);
+});
+
+test('rejects empty, extension-mismatched, and unsupported digital books', () => {
+  assert.match(validateBookFile({ mime: 'text/plain', filename: 'empty.txt', bytes: Buffer.alloc(0) }).error, /empty/);
+  assert.match(validateBookFile({ mime: 'text/plain', filename: 'wrong.pdf', bytes: Buffer.from('plain text') }).error, /Only PDF/);
+  assert.match(validateBookFile({ mime: 'application/epub+zip', filename: 'book.epub', bytes: Buffer.from('PK') }).error, /Only PDF and plain text/);
+});

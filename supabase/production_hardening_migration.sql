@@ -32,7 +32,7 @@ revoke all on table
   public.categories, public.authors, public.book_authors,
   public.book_open_events, public.library_settings,
   public.reader_favourites, public.reader_progress,
-  public.reader_bookmarks, public.reader_history
+  public.reader_bookmarks, public.reader_history, public.reader_highlights
 from public, anon, authenticated;
 
 grant select, insert, update, delete on table
@@ -43,7 +43,7 @@ grant select, insert, update, delete on table
   public.categories, public.authors, public.book_authors,
   public.book_open_events, public.library_settings,
   public.reader_favourites, public.reader_progress,
-  public.reader_bookmarks, public.reader_history
+  public.reader_bookmarks, public.reader_history, public.reader_highlights
 to service_role;
 
 revoke all on sequence
@@ -51,14 +51,14 @@ revoke all on sequence
   public.password_reset_tokens_id_seq, public.email_verification_tokens_id_seq,
   public.newsletter_subscriptions_id_seq, public.security_audit_logs_id_seq,
   public.categories_id_seq, public.authors_id_seq, public.book_open_events_id_seq,
-  public.reader_bookmarks_id_seq
+  public.reader_bookmarks_id_seq, public.reader_highlights_id_seq
 from public, anon, authenticated;
 grant usage, select on sequence
   public.users_id_seq, public.books_id_seq, public.login_activities_id_seq,
   public.password_reset_tokens_id_seq, public.email_verification_tokens_id_seq,
   public.newsletter_subscriptions_id_seq, public.security_audit_logs_id_seq,
   public.categories_id_seq, public.authors_id_seq, public.book_open_events_id_seq,
-  public.reader_bookmarks_id_seq
+  public.reader_bookmarks_id_seq, public.reader_highlights_id_seq
 to service_role;
 
 alter default privileges in schema public
